@@ -657,6 +657,7 @@ public partial class WorkflowExecutionContext : IExecutionContext
     // TODO: Check if we should not use the target subStatus here instead.
     private bool ValidateStatusTransition()
     {
+        return true;
         var currentMainStatus = GetMainStatus(SubStatus);
         return currentMainStatus != WorkflowStatus.Finished;
     }

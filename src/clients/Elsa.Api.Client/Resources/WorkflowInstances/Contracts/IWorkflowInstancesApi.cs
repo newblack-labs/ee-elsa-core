@@ -63,6 +63,14 @@ public interface IWorkflowInstancesApi
     /// <param name="cancellationToken">The cancellation token.</param>
     [Delete("/workflow-instances/{id}")]
     Task DeleteAsync(string id, CancellationToken cancellationToken = default);
+    
+    /// <summary>
+    /// Retries a workflow instance.
+    /// </summary>
+    /// <param name="id">The ID of the workflow instance to delete.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    [Post("/workflow-instances/{id}/retries")]
+    Task RetryAsync(string id, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Deletes a list of workflow instances.

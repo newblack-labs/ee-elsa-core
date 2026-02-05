@@ -24,6 +24,11 @@ public class JsonPayloadSerializer : IPayloadSerializer
     /// <inheritdoc />
     public string Serialize(object payload)
     {
+        if (payload.GetType() == typeof(object))
+        {
+            return "{}";
+        }
+        
         var options = GetOptions();
         return JsonSerializer.Serialize(payload, options);
     }
