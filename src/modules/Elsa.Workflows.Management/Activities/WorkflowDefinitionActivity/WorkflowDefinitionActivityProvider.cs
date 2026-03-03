@@ -15,6 +15,21 @@ public class WorkflowDefinitionActivityProvider(IWorkflowDefinitionStore store, 
     /// <inheritdoc />
     public async ValueTask<IEnumerable<ActivityDescriptor>> GetDescriptorsAsync(CancellationToken cancellationToken = default)
     {
+        // Diagnostic: query ALL workflow definitions to see what's in the DB
+        var allFilter = new WorkflowDefinitionFilter { VersionOptions = VersionOptions.LatestOrPublished };
+        var allDefinitions = (await store.FindManyAsync(allFilter, cancellationToken)).ToList();
+        logger.LogInformation("WorkflowDefinitionActivityProvider: Total workflow definitions in DB (latest/published): {Count}", allDefinitions.Count);
+        foreach (var def in allDefinitions)
+        {
+            logger.LogInformation("  - {Name} (id={Id}, definitionId={DefinitionId}, v{Version}, published={IsPublished}, usableAsActivity={UsableAsActivity})",
+                def.Name ?? "(unnamed)",
+                def.Id,
+                def.DefinitionId,
+                def.Version,
+                def.IsPublished,
+                def.Options.UsableAsActivity);
+        }
+
         var filter = new WorkflowDefinitionFilter
         {
             UsableAsActivity = true,
@@ -25,7 +40,7 @@ public class WorkflowDefinitionActivityProvider(IWorkflowDefinitionStore store, 
 
         if (definitions.Count == 0)
         {
-            logger.LogInformation("WorkflowDefinitionActivityProvider: No workflow definitions with UsableAsActivity=true found in database");
+            logger.LogInformation("WorkflowDefinitionActivityProvider: No workflow definitions with UsableAsActivity=true found after filtering");
         }
         else
         {
