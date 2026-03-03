@@ -281,6 +281,11 @@ public class HttpEndpoint : Trigger<HttpRequest>
                 await HandleInvalidJsonPayloadAsync(context, httpContext, e);
                 return;
             }
+            catch (Parsers.XmlParseException e)
+            {
+                context.AddExecutionLogEntry("XML parse error", message: $"{e.Message}\n\nRaw body:\n{e.RawBody}");
+                throw;
+            }
 
         }
 
