@@ -1,5 +1,7 @@
+using System.Xml;
 using System.Xml.Serialization;
 using Elsa.Http.Contexts;
+using Microsoft.Extensions.Logging;
 
 namespace Elsa.Http.Parsers;
 
@@ -8,6 +10,13 @@ namespace Elsa.Http.Parsers;
 /// </summary>
 public class XmlHttpContentParser : IHttpContentParser
 {
+    private readonly ILogger<XmlHttpContentParser> _logger;
+
+    public XmlHttpContentParser(ILogger<XmlHttpContentParser> logger)
+    {
+        _logger = logger;
+    }
+
     /// <inheritdoc />
     public int Priority => 0;
 
@@ -25,8 +34,19 @@ public class XmlHttpContentParser : IHttpContentParser
         if (returnType == null || returnType == typeof(string))
             return xml;
 
-        var serializer = new XmlSerializer(returnType);
-        using var stringReader = new StringReader(xml);
-        return serializer.Deserialize(stringReader)!;
+        try
+        {
+            var serializer = new XmlSerializer(returnType);
+            using var stringReader = new StringReader(xml);
+            return serializer.Deserialize(stringReader)!;
+        }
+        catch (Exception ex) when (ex is XmlException or InvalidOperationException)
+        {
+            var preview = xml.Length > 2000 ? xml[..2000] + "... (truncated)" : xml;
+            _logger.LogError(ex, "Failed to parse XML content. Raw body:\n{RawBody}", preview);
+
+            // Wrap with raw body so upstream (HttpEndpoint) can log it in the execution log.
+            throw new XmlParseException(ex.Message, preview, ex);
+        }
     }
 }
