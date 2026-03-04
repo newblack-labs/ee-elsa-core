@@ -191,8 +191,8 @@ public class DefaultWorkflowDefinitionStorePopulator : IWorkflowDefinitionStoreP
         await UpdateIsPublished();
 
         // Determine the tenant ID for the workflow definition
-        // If the workflow has no tenant ID, use the current tenant (normalized to handle null -> "")
-        var workflowTenantId = workflow.Identity.TenantId ?? (_tenantAccessor.Tenant?.Id).NormalizeTenantId();
+        // If the workflow has no tenant ID, use the current tenant's ID (keep null if no tenant is configured)
+        var workflowTenantId = workflow.Identity.TenantId ?? _tenantAccessor.Tenant?.Id;
 
         var workflowDefinition = existingDefinitionVersion ?? new WorkflowDefinition
         {
