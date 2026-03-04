@@ -25,7 +25,11 @@ public class ResilienceStrategyCatalog : IResilienceStrategyCatalog
     private async Task<IEnumerable<IResilienceStrategy>> GetStrategiesInternalAsync()
     {
         var strategies = new List<IResilienceStrategy>();
-        foreach (var provider in _providers) strategies.AddRange(await provider.GetStrategiesAsync());
+        foreach (var provider in _providers)
+        {
+            var result = await provider.GetStrategiesAsync();
+            if (result != null) strategies.AddRange(result);
+        }
         return strategies;
     }
 }
