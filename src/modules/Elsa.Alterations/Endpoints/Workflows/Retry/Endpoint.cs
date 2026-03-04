@@ -2,6 +2,7 @@ using Elsa.Abstractions;
 using Elsa.Alterations.AlterationTypes;
 using Elsa.Alterations.Core.Contracts;
 using Elsa.Alterations.Core.Results;
+using Elsa.Common.Models;
 using Elsa.Workflows.Management;
 using Elsa.Workflows.Management.Entities;
 using Elsa.Workflows.Management.Filters;
@@ -21,13 +22,15 @@ public class Retry : ElsaEndpoint<Request, Response>
     private readonly IAlterationRunner _alterationRunner;
     private readonly IWorkflowDispatcher _workflowDispatcher;
     private readonly IWorkflowInstanceStore _workflowInstanceStore;
+    private readonly IWorkflowDefinitionStore _workflowDefinitionStore;
 
     /// <inheritdoc />
-    public Retry(IAlterationRunner alterationRunner, IWorkflowDispatcher workflowDispatcher, IWorkflowInstanceStore workflowInstanceStore)
+    public Retry(IAlterationRunner alterationRunner, IWorkflowDispatcher workflowDispatcher, IWorkflowInstanceStore workflowInstanceStore, IWorkflowDefinitionStore workflowDefinitionStore)
     {
         _alterationRunner = alterationRunner;
         _workflowDispatcher = workflowDispatcher;
         _workflowInstanceStore = workflowInstanceStore;
+        _workflowDefinitionStore = workflowDefinitionStore;
     }
 
     /// <inheritdoc />
@@ -42,24 +45,37 @@ public class Retry : ElsaEndpoint<Request, Response>
     public override async Task HandleAsync(Request request, CancellationToken cancellationToken)
     {
         var allResults = new List<RunAlterationsResult>();
-        
+
         // Load each workflow instance.
         var workflowInstances = (await _workflowInstanceStore.FindManyAsync(new WorkflowInstanceFilter { Ids = request.WorkflowInstanceIds }, cancellationToken)).ToList();
 
         foreach (var workflowInstance in workflowInstances)
         {
-            // Setup an alteration plan.
+            // Build the alteration plan: migrate to latest published version, then re-schedule faulted activities.
+            var alterations = new List<IAlteration>();
+
+            // Migrate to latest published version if a newer one exists.
+            var latestPublished = await _workflowDefinitionStore.FindAsync(new WorkflowDefinitionFilter
+            {
+                DefinitionId = workflowInstance.DefinitionId,
+                VersionOptions = VersionOptions.Published
+            }, cancellationToken);
+
+            if (latestPublished != null && latestPublished.Version > workflowInstance.Version)
+                alterations.Add(new Migrate { TargetVersion = latestPublished.Version });
+
+            // Schedule faulted activities.
             var activityIds = GetActivityIds(request, workflowInstance).ToList();
-            var alterations = activityIds.Select(activityId => new ScheduleActivity { ActivityId = activityId }).Cast<IAlteration>().ToList();
-            
+            alterations.AddRange(activityIds.Select(activityId => new ScheduleActivity { ActivityId = activityId }));
+
             // Run the plan.
-            var results = await _alterationRunner.RunAsync(request.WorkflowInstanceIds, alterations, cancellationToken);
+            var results = await _alterationRunner.RunAsync([workflowInstance.Id], alterations, cancellationToken);
             allResults.AddRange(results);
-            
+
             // Schedule updated workflow.
             await _workflowDispatcher.DispatchAsync(new DispatchWorkflowInstanceRequest(workflowInstance.Id), cancellationToken: cancellationToken);
         }
-        
+
         // Write response.
         var response = new Response(allResults);
         await Send.OkAsync(response, cancellationToken);
