@@ -23,7 +23,14 @@ public static class ConfigurationExtensions
     {
         var children = section.GetChildren().ToList();
         if (!children.Any())
-            return section.Value;
+        {
+            var value = section.Value;
+            if (value == null) return null;
+            if (bool.TryParse(value, out var b)) return b;
+            if (long.TryParse(value, out var l)) return l;
+            if (double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var d)) return d;
+            return value;
+        }
 
         if (children.All(c => int.TryParse(c.Key, out _)))
         {
