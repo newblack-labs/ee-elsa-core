@@ -98,6 +98,7 @@
         <PackageVersion Include="DistributedLock" Version="2.7.1"/>
         <PackageVersion Include="DistributedLock.Core" Version="1.0.8"/>
         <PackageVersion Include="DistributedLock.FileSystem" Version="1.0.3"/>
+        <PackageVersion Include="DistributedLock.Postgres" Version="1.0.6"/>
         <PackageVersion Include="Elastic.Clients.Elasticsearch" Version="9.2.2"/>
         <PackageVersion Include="FastEndpoints" Version="7.1.1"/>
         <PackageVersion Include="FastEndpoints.Security" Version="7.1.1"/>
