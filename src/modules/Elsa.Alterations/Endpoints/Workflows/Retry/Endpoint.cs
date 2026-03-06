@@ -79,6 +79,10 @@ public class Retry : ElsaEndpoint<Request, Response>
                 var updatedInstance = await _workflowInstanceStore.FindAsync(new WorkflowInstanceFilter { Id = workflowInstance.Id }, cancellationToken);
                 if (updatedInstance != null)
                 {
+                    updatedInstance.Status = WorkflowStatus.Running;
+                    updatedInstance.SubStatus = WorkflowSubStatus.Executing;
+                    updatedInstance.IncidentCount = 0;
+                    updatedInstance.FinishedAt = null;
                     updatedInstance.WorkflowState.SubStatus = WorkflowSubStatus.Executing;
                     updatedInstance.WorkflowState.Incidents.Clear();
                     await _workflowInstanceStore.SaveAsync(updatedInstance, cancellationToken);
