@@ -6,6 +6,7 @@ using Elsa.Common.Models;
 using Elsa.Workflows.Management;
 using Elsa.Workflows.Management.Entities;
 using Elsa.Workflows.Management.Filters;
+using Elsa.Workflows;
 using Elsa.Workflows.Runtime;
 using Elsa.Workflows.Runtime.Contracts;
 using Elsa.Workflows.Runtime.Requests;
@@ -71,6 +72,18 @@ public class Retry : ElsaEndpoint<Request, Response>
             // Run the plan.
             var results = await _alterationRunner.RunAsync([workflowInstance.Id], alterations, cancellationToken);
             allResults.AddRange(results);
+
+            // Transition the workflow from Faulted back to a running state so the dispatcher can pick it up.
+            if (workflowInstance.SubStatus == WorkflowSubStatus.Faulted)
+            {
+                var updatedInstance = await _workflowInstanceStore.FindAsync(new WorkflowInstanceFilter { Id = workflowInstance.Id }, cancellationToken);
+                if (updatedInstance != null)
+                {
+                    updatedInstance.WorkflowState.SubStatus = WorkflowSubStatus.Executing;
+                    updatedInstance.WorkflowState.Incidents.Clear();
+                    await _workflowInstanceStore.SaveAsync(updatedInstance, cancellationToken);
+                }
+            }
 
             // Schedule updated workflow.
             await _workflowDispatcher.DispatchAsync(new DispatchWorkflowInstanceRequest(workflowInstance.Id), cancellationToken: cancellationToken);
