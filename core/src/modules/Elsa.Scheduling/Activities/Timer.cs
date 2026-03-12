@@ -15,6 +15,7 @@ public class Timer : TimerBase
     /// <inheritdoc />
     public Timer([CallerFilePath] string? source = null, [CallerLineNumber] int? line = null) : base(source, line)
     {
+        CanStartWorkflow = true;
     }
 
     /// <inheritdoc />
