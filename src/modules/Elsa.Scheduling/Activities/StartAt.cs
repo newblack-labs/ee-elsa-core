@@ -22,6 +22,7 @@ public class StartAt : Trigger
     /// <inheritdoc />
     public StartAt([CallerFilePath] string? source = null, [CallerLineNumber] int? line = null) : base(source, line)
     {
+        CanStartWorkflow = true;
     }
 
     /// <inheritdoc />
