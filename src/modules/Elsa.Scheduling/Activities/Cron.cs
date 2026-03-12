@@ -16,6 +16,7 @@ public class Cron : EventGenerator
     /// <inheritdoc />
     public Cron([CallerFilePath] string? source = null, [CallerLineNumber] int? line = null) : base(source, line)
     {
+        CanStartWorkflow = true;
     }
 
     /// <inheritdoc />
