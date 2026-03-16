@@ -80,6 +80,9 @@ public class ScheduleActivityHandler : AlterationHandlerBase<ScheduleActivity>
         if (alteration.ActivityInstanceId != null)
             return context.WorkflowExecutionContext.ActivityExecutionContexts.FirstOrDefault(x => x.Id == alteration.ActivityInstanceId);
 
+        if (alteration.ActivityId != null)
+            return context.WorkflowExecutionContext.ActivityExecutionContexts.FirstOrDefault(x => x.Activity.Id == alteration.ActivityId);
+
         return null;
     }
 }
