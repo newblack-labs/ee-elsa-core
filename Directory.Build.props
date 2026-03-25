@@ -8,8 +8,6 @@
         <RepositoryType>git</RepositoryType>
 
         <LangVersion>latest</LangVersion>
-        <!-- Match the version expected by Elsa NuGet packages (MassTransit, Quartz) at 3.5.3 -->
-        <Version>3.5.3</Version>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
 
