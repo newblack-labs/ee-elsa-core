@@ -8,6 +8,10 @@
         <RepositoryType>git</RepositoryType>
 
         <LangVersion>latest</LangVersion>
+        <!-- Pin AssemblyVersion to match the Elsa 3.7.1 NuGet extension packages (MassTransit, Quartz,
+             Retention, Csv, Caching.Distributed) which bind to Elsa.Features 3.7.1.0. The source build
+             otherwise stamps 1.0.0.0, risking a runtime FileNotFoundException. See plans/elsa-3.7.0-upgrade.md §2.3. -->
+        <Version>3.7.1</Version>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
 
