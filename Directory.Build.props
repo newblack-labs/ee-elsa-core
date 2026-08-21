@@ -8,6 +8,13 @@
         <RepositoryType>git</RepositoryType>
 
         <LangVersion>latest</LangVersion>
+        <!-- Stamp the source build with the Elsa version it is built from. The build otherwise stamps
+             1.0.0.0, which is LOWER than the version the Elsa NuGet extension packages (MassTransit,
+             Quartz, Retention, Csv, Caching.Distributed) bind to, causing a runtime
+             FileNotFoundException. Those packages stay at 3.7.1 (elsa-extensions has no 3.8 release);
+             3.8.0 is higher than what they reference, which .NET resolves without complaint.
+             See plans/elsa-3.8.0-upgrade.md §3.3. -->
+        <Version>3.8.0</Version>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
 
