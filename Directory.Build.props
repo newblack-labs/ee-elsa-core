@@ -8,6 +8,12 @@
         <RepositoryType>git</RepositoryType>
 
         <LangVersion>latest</LangVersion>
+        <!-- Stamp the source build with the Elsa version it is built from. The build otherwise stamps
+             1.0.0.0, which is LOWER than the version the Elsa NuGet extension packages (MassTransit,
+             Quartz, Retention, Csv, Caching.Distributed) bind to, causing a runtime
+             FileNotFoundException. Keep it equal to the extension packages' version in Nexum's
+             Directory.Packages.props. -->
+        <Version>3.9.0</Version>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
 
