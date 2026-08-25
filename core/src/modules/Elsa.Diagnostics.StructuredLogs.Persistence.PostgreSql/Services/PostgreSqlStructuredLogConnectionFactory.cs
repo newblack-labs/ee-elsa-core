@@ -10,12 +10,7 @@ public class PostgreSqlStructuredLogConnectionFactory(IOptions<PostgreSqlStructu
 {
     public async ValueTask<DbConnection> OpenConnectionAsync(CancellationToken cancellationToken = default)
     {
-        var connectionString = options.Value.ConnectionString;
-
-        if (string.IsNullOrWhiteSpace(connectionString))
-            throw new InvalidOperationException(
-                "No PostgreSQL connection string is configured for structured log persistence. Set it when calling UsePostgreSqlStorage.");
-
+        var connectionString = await options.Value.ResolveConnectionStringAsync(cancellationToken);
         var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
         return connection;
