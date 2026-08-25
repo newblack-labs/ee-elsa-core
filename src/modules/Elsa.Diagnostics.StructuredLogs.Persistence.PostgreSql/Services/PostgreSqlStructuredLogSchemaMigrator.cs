@@ -9,15 +9,14 @@ namespace Elsa.Diagnostics.StructuredLogs.Persistence.PostgreSql.Services;
 
 public class PostgreSqlStructuredLogSchemaMigrator(IOptions<PostgreSqlStructuredLogOptions> options) : IStructuredLogSchemaMigrator
 {
-    public ValueTask MigrateAsync(CancellationToken cancellationToken = default)
+    public async ValueTask MigrateAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var connectionString = options.Value.ConnectionString;
-
-        if (string.IsNullOrWhiteSpace(connectionString))
-            throw new InvalidOperationException(
-                "No PostgreSQL connection string is configured for structured log persistence. Set it when calling UsePostgreSqlStorage.");
+        // Resolved rather than read, so a deployment whose credential is a short-lived token — Entra ID
+        // managed identity — migrates with a live one instead of a connection string that carries no
+        // password at all.
+        var connectionString = await options.Value.ResolveConnectionStringAsync(cancellationToken);
 
         // The migration itself is shared with the SQLite provider and needs no PostgreSQL variant: it is
         // written against FluentMigrator's fluent API rather than raw SQL, so the column types are
@@ -33,6 +32,5 @@ public class PostgreSqlStructuredLogSchemaMigrator(IOptions<PostgreSqlStructured
 
         using var scope = services.CreateScope();
         scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
-        return ValueTask.CompletedTask;
     }
 }
