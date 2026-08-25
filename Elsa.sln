@@ -311,6 +311,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Elsa.Diagnostics.Structured
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Elsa.Diagnostics.StructuredLogs.Persistence.Sqlite", "core\src\modules\Elsa.Diagnostics.StructuredLogs.Persistence.Sqlite\Elsa.Diagnostics.StructuredLogs.Persistence.Sqlite.csproj", "{A0D906D7-9E4D-4C50-93B4-8720BB0AAFA7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Elsa.Diagnostics.StructuredLogs.Persistence.PostgreSql", "core\src\modules\Elsa.Diagnostics.StructuredLogs.Persistence.PostgreSql\Elsa.Diagnostics.StructuredLogs.Persistence.PostgreSql.csproj", "{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Elsa.Diagnostics.StructuredLogs.Persistence.Relational.UnitTests", "core\test\unit\Elsa.Diagnostics.StructuredLogs.Persistence.Relational.UnitTests\Elsa.Diagnostics.StructuredLogs.Persistence.Relational.UnitTests.csproj", "{695814F0-7E8F-469E-9A5A-E46759A4D67C}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Elsa.Diagnostics.StructuredLogs.Persistence.Sqlite.IntegrationTests", "core\test\integration\Elsa.Diagnostics.StructuredLogs.Persistence.Sqlite.IntegrationTests\Elsa.Diagnostics.StructuredLogs.Persistence.Sqlite.IntegrationTests.csproj", "{FB7836E3-1D05-4123-B4FA-B9E722723603}"
@@ -1968,6 +1970,18 @@ Global
 		{A0D906D7-9E4D-4C50-93B4-8720BB0AAFA7}.Release|x64.Build.0 = Release|Any CPU
 		{A0D906D7-9E4D-4C50-93B4-8720BB0AAFA7}.Release|x86.ActiveCfg = Release|Any CPU
 		{A0D906D7-9E4D-4C50-93B4-8720BB0AAFA7}.Release|x86.Build.0 = Release|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Debug|x64.Build.0 = Debug|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Debug|x86.Build.0 = Debug|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Release|x64.ActiveCfg = Release|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Release|x64.Build.0 = Release|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Release|x86.ActiveCfg = Release|Any CPU
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE}.Release|x86.Build.0 = Release|Any CPU
 		{695814F0-7E8F-469E-9A5A-E46759A4D67C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{695814F0-7E8F-469E-9A5A-E46759A4D67C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{695814F0-7E8F-469E-9A5A-E46759A4D67C}.Debug|x64.ActiveCfg = Debug|Any CPU
@@ -5374,6 +5388,7 @@ Global
 		{2530E106-A168-4C57-9DFC-AB3F2CBD36AE} = {31399E63-138C-57F8-802D-444D95FA55FE}
 		{FDABE591-B1A1-4842-9332-04A894D76C05} = {2D02A642-8E60-553F-B3BD-0AC422506EDB}
 		{A0D906D7-9E4D-4C50-93B4-8720BB0AAFA7} = {2D02A642-8E60-553F-B3BD-0AC422506EDB}
+		{A541680A-3E4C-4D54-A1B8-B0C01230E5EE} = {2D02A642-8E60-553F-B3BD-0AC422506EDB}
 		{695814F0-7E8F-469E-9A5A-E46759A4D67C} = {31399E63-138C-57F8-802D-444D95FA55FE}
 		{FB7836E3-1D05-4123-B4FA-B9E722723603} = {31399E63-138C-57F8-802D-444D95FA55FE}
 		{195FD304-EC3F-4350-93C8-AFE80C4E6896} = {2D02A642-8E60-553F-B3BD-0AC422506EDB}
