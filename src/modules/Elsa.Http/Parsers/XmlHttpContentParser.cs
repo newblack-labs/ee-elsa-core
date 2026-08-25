@@ -43,7 +43,14 @@ public class XmlHttpContentParser : IHttpContentParser
         catch (Exception ex) when (ex is XmlException or InvalidOperationException)
         {
             var preview = xml.Length > 2000 ? xml[..2000] + "... (truncated)" : xml;
-            _logger.LogError(ex, "Failed to parse XML content. Raw body:\n{RawBody}", preview);
+
+            // The body is attacker-controlled and unredacted: for a SOAP caller it carries WS-Security
+            // credentials, and for any caller it can carry personal data. Report the failure at Error
+            // without it, and keep the body itself at Debug so it is available when someone is actively
+            // diagnosing a malformed payload but is not emitted at production log levels — where it
+            // would also be served to the browser by the console-log diagnostics stream.
+            _logger.LogError(ex, "Failed to parse XML content ({Length} bytes).", xml.Length);
+            _logger.LogDebug("Raw body that failed to parse as XML:\n{RawBody}", preview);
 
             // Wrap with raw body so upstream (HttpEndpoint) can log it in the execution log.
             throw new XmlParseException(ex.Message, preview, ex);
