@@ -46,7 +46,12 @@ public sealed class ExternalAuthenticationWasmLoginCoordinator : ExternalAuthent
             ["return_path"] = transaction.ReturnPath,
             ["state"] = transaction.State
         };
-        navigationManager.NavigateTo(QueryHelpers.AddQueryString(initiationUri.AbsoluteUri, query));
+        // forceLoad, because this URI addresses the broker on the server, not a page in this app. When
+        // Studio is served from the same origin as the Elsa backend, Blazor otherwise treats it as an
+        // internal route, finds no component for it and renders its NotFound page, so the sign-in
+        // never leaves the browser. BeginLocalAsync below deliberately does not force a load: its
+        // target is this app's own callback page.
+        navigationManager.NavigateTo(QueryHelpers.AddQueryString(initiationUri.AbsoluteUri, query), forceLoad: true);
     }
 
     /// <inheritdoc />
