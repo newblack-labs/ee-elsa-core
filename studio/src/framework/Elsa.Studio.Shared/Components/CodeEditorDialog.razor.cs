@@ -68,6 +68,11 @@ public partial class CodeEditorDialog : IDisposable
     {
         _isInternalContentChange = true;
         var model = await _monacoEditor!.GetModel();
+        if (model == null)
+        {
+            _isInternalContentChange = false;
+            return;
+        }
         _lastMonacoEditorContent = Value;
         await model.SetValue(Value);
         _isInternalContentChange = false;

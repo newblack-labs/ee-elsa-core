@@ -116,6 +116,8 @@ public partial class ContentVisualizer : ComponentBase
             FormatUsing(visualizer);
 
             var model = await _monacoEditor!.GetModel();
+            if (model == null)
+                return;
             await Global.SetModelLanguage(JSRuntime, model, _selectedVisualizer.Syntax);
         }
     }
