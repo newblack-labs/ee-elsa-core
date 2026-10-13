@@ -18,30 +18,20 @@ namespace Elsa.Persistence.EFCore.Sqlite.Migrations.Labels
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // SQLite has no schemas: the provider drops the schema from every table it creates, so raw SQL must name the
+            // table unqualified. "Elsa"."Labels" would be read as table Labels of an attached database "Elsa" and fail with
+            // "no such table", aborting the tenant's startup tasks.
             // Default tenant is "" (not null). Stamp leftover nulls so the unique index covers them.
             migrationBuilder.Sql($"""
-                UPDATE "{_schema.Schema}"."Labels"
+                UPDATE "Labels"
                 SET "TenantId" = ''
                 WHERE "TenantId" IS NULL;
                 """);
 
-            // No silent dedupe. List leftover keys and abort; operators must resolve them before upgrading.
-            migrationBuilder.Sql($"""
-                SELECT RAISE(ABORT, 'Cannot apply IX_Label_TenantId_NormalizedName. Operators must resolve leftover (TenantId, NormalizedName) rows before upgrade. Duplicate keys: ' ||
-                    (SELECT group_concat('(' || IFNULL("TenantId", '') || ', ' || "NormalizedName" || ')', ', ')
-                     FROM (
-                         SELECT "TenantId", "NormalizedName"
-                         FROM "{_schema.Schema}"."Labels"
-                         GROUP BY "TenantId", "NormalizedName"
-                         HAVING COUNT(*) > 1
-                     )))
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM "{_schema.Schema}"."Labels"
-                    GROUP BY "TenantId", "NormalizedName"
-                    HAVING COUNT(*) > 1
-                );
-                """);
+            // No silent dedupe: the unique index below refuses leftover duplicate (TenantId, NormalizedName) rows itself, failing
+            // with "UNIQUE constraint failed: Labels.TenantId, Labels.NormalizedName", and operators resolve them before
+            // upgrading. The other providers list the duplicates first with a RAISE; SQLite allows RAISE() only inside a
+            // trigger and rejects the statement when preparing it, so there it would fail every upgrade, duplicates or not.
 
             migrationBuilder.CreateIndex(
                 name: "IX_Label_TenantId_NormalizedName",
