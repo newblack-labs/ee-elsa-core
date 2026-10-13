@@ -3,9 +3,11 @@
 @using Elsa.Studio.Extensions
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.Extensions.DependencyInjection
+@using Microsoft.Extensions.Logging
 @implements IDisposable
 @inject IMenuService MenuService;
 @inject IServiceProvider Services
+@inject ILogger<NavMenu> Logger
 
 <MudNavMenu Color="Color.Primary" Margin="Margin.Dense" Class="studio-nav">
     @foreach (var (menuItemGroup, menuItems) in _navigation)
@@ -77,6 +79,9 @@
 
     private async Task ReloadMenuAsync()
     {
+        // Called from async void handlers: an exception escaping here is unobserved, and in WebAssembly nothing
+        // surfaces it, so the user would be left with a silently stale navigation for the rest of the session.
+        // Log it instead.
         try
         {
             await InvokeAsync(async () =>
@@ -85,9 +90,9 @@
                 StateHasChanged();
             });
         }
-        catch
+        catch (Exception e)
         {
-            // A permission notification must not become an unobserved exception.
+            Logger.LogError(e, "Failed to rebuild the navigation after a permission or authentication state change");
         }
     }
 }

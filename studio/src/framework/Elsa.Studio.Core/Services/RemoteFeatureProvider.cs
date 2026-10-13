@@ -3,6 +3,7 @@ using Elsa.Api.Client.Resources.Features.Contracts;
 using Elsa.Api.Client.Resources.Features.Models;
 using Elsa.Studio.Contracts;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.Extensions.Logging;
 using Refit;
 
 namespace Elsa.Studio.Services;
@@ -12,11 +13,25 @@ namespace Elsa.Studio.Services;
 /// </summary>
 public class RemoteFeatureProvider(
     IBackendApiClientProvider remoteBackendApiClientProvider,
-    AuthenticationStateProvider? authenticationStateProvider = null) : IRemoteFeatureProvider
+    AuthenticationStateProvider? authenticationStateProvider = null,
+    ILogger<RemoteFeatureProvider>? logger = null) : IRemoteFeatureProvider
 {
+    /// <summary>
+    /// How long an unavailable catalog is treated as unavailable before another attempt.
+    /// </summary>
+    /// <remarks>
+    /// Short enough that a backend still starting is picked up on the next menu rebuild, long enough
+    /// that a permanently absent endpoint does not produce one request per feature-gated menu provider
+    /// per rebuild — several of them, serialized behind the lock, on every token change.
+    /// </remarks>
+    private static readonly TimeSpan UnavailableBackoff = TimeSpan.FromSeconds(30);
+
     private readonly SemaphoreSlim _catalogLock = new(1, 1);
     private IReadOnlyCollection<FeatureDescriptor>? _catalog;
     private Uri? _catalogUrl;
+    private Uri? _unavailableUrl;
+    private DateTimeOffset _retryCatalogAfter = DateTimeOffset.MinValue;
+    private bool _loggedUnavailable;
 
     /// <inheritdoc />
     public async Task<bool> IsEnabledAsync(string featureName, CancellationToken cancellationToken = default)
@@ -41,6 +56,14 @@ public class RemoteFeatureProvider(
         if (_catalog is not null && _catalogUrl == remoteBackendApiClientProvider.Url)
             return _catalog;
 
+        // Backed off rather than cached for the session. A 404 here is as likely to be transient as
+        // permanent — the backend still starting, or a stale proxy route — and caching the empty result
+        // hid every [RemoteFeature]-gated menu for the rest of the session, since the gate fails
+        // closed. Retrying on every single call instead would storm a permanently absent endpoint.
+        // The backoff belongs to the backend that answered 404, so switching environments retries at once.
+        if (IsBackingOff(remoteBackendApiClientProvider.Url))
+            return [];
+
         await _catalogLock.WaitAsync(cancellationToken);
         try
         {
@@ -50,21 +73,41 @@ public class RemoteFeatureProvider(
             if (_catalog is not null && _catalogUrl == backendUrl)
                 return _catalog;
 
+            if (IsBackingOff(backendUrl))
+                return [];
+
             try
             {
                 var response = await api.ListAsync(cancellationToken);
                 _catalog = response.Items.ToArray();
                 _catalogUrl = backendUrl;
+                _unavailableUrl = null;
+                _loggedUnavailable = false;
                 return _catalog;
             }
             catch (ApiException e) when (e.StatusCode is HttpStatusCode.NotFound)
             {
-                _catalog = [];
-                _catalogUrl = backendUrl;
-                return _catalog;
+                _unavailableUrl = backendUrl;
+                _retryCatalogAfter = DateTimeOffset.UtcNow + UnavailableBackoff;
+
+                // Logged once per outage, not once per call: the gate fails closed, so without a line
+                // here an incomplete sidebar is indistinguishable from a correctly gated one.
+                if (!_loggedUnavailable)
+                {
+                    _loggedUnavailable = true;
+                    logger?.LogWarning(
+                        e,
+                        "Feature catalog unavailable (404). Feature-gated navigation will be incomplete until the backend responds; retrying in {Backoff}",
+                        UnavailableBackoff);
+                }
+
+                return [];
             }
             catch (ApiException e) when (e.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             {
+                // Expected before sign-in completes, so Debug rather than Warning — and not backed off,
+                // because the very next call may be the authenticated one.
+                logger?.LogDebug(e, "Feature catalog not readable yet ({StatusCode})", e.StatusCode);
                 return [];
             }
         }
@@ -73,4 +116,7 @@ public class RemoteFeatureProvider(
             _catalogLock.Release();
         }
     }
+
+    private bool IsBackingOff(Uri? backendUrl) =>
+        _unavailableUrl is not null && _unavailableUrl == backendUrl && DateTimeOffset.UtcNow < _retryCatalogAfter;
 }
