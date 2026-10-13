@@ -1018,13 +1018,16 @@
         _ => Color.Default
     };
 
-    private Color DurationColor(TimeSpan duration) => duration.TotalMilliseconds switch
+    // Plain if-chain rather than a switch expression with relational patterns (`< 50 => ...`) — a
+    // bare `<`/`<=` with no operand directly to its left reads to Razor's markup scanner, anywhere
+    // in a code block, as the start of an HTML tag, corrupting the parse for the rest of the file.
+    private Color DurationColor(TimeSpan duration)
     {
-        < 50 => Color.Default,
-        <= 500 => Color.Info,
-        <= 1000 => Color.Warning,
-        _ => Color.Error
-    };
+        var ms = duration.TotalMilliseconds;
+        if (ms < 50) return Color.Default;
+        if (ms <= 500) return Color.Info;
+        return ms <= 1000 ? Color.Warning : Color.Error;
+    }
 
     private string TraceResourceNames(TelemetryTrace trace)
     {
