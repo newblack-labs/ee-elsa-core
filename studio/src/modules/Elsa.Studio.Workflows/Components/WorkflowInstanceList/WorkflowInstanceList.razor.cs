@@ -1,5 +1,6 @@
 using Elsa.Api.Client.Resources.Alterations.Contracts;
 using Elsa.Api.Client.Resources.Alterations.Models;
+using Elsa.Api.Client.Resources.Alterations.Requests;
 using Elsa.Api.Client.Resources.WorkflowDefinitions.Models;
 using Elsa.Api.Client.Resources.WorkflowInstances.Enums;
 using Elsa.Api.Client.Resources.WorkflowInstances.Models;
@@ -91,6 +92,10 @@ public partial class WorkflowInstanceList : IAsyncDisposable
     private bool CanBulkCancel => CanCancel || Permissions.CanExecuteAlterations();
     private bool CanImport => Permissions.CanImportInstances();
     private bool CanAlter => Permissions.CanAlterInstances();
+
+    // The retry endpoint lives in the Alterations module and requires alterations:execute, so the action is
+    // offered only where that module is enabled and the user holds that permission.
+    private bool CanRetry => IsAlterationsEnabled && Permissions.CanExecuteAlterations();
 
     private void Reload() => _table.ReloadServerData();
     private async Task ViewAsync(string instanceId) => await ViewWorkflowInstance.InvokeAsync(instanceId);
@@ -377,6 +382,19 @@ public partial class WorkflowInstanceList : IAsyncDisposable
         Reload();
     }
 
+    private async Task OnRetryClicked(WorkflowInstanceRow row)
+    {
+        var result = await DialogService.ShowMessageBoxAsync(Localizer["Retry workflow instance?"], Localizer["Are you sure you want to retry this workflow instance? It will be migrated to the latest published version."], yesText: Localizer["Retry"], cancelText: Localizer["Cancel"]);
+
+        if (result != true)
+            return;
+
+        var request = new BulkRetryRequest { WorkflowInstanceIds = [row.WorkflowInstanceId] };
+        var alterationsApi = await BackendApiClientProvider.GetApiAsync<IAlterationsApi>();
+        await alterationsApi.BulkRetryAsync(request, CancellationToken.None);
+        Reload();
+    }
+
     private async Task OnDownloadClicked(WorkflowInstanceRow workflowInstanceRow)
     {
         var download = await WorkflowInstanceService.ExportAsync(workflowInstanceRow.WorkflowInstanceId);
@@ -451,6 +469,21 @@ public partial class WorkflowInstanceList : IAsyncDisposable
             await WorkflowInstanceService.BulkCancelAsync(request);
         }
 
+        Reload();
+    }
+
+    private async Task OnBulkRetryClicked()
+    {
+        var result = await DialogService.ShowMessageBoxAsync(Localizer["Retry selected workflow instances?"], Localizer["Are you sure you want to retry the selected workflow instances?"], yesText: Localizer["Retry"], cancelText: Localizer["Cancel"]);
+
+        if (result != true)
+            return;
+
+        var workflowInstanceIds = _selectedRows.Select(x => x.WorkflowInstanceId).ToList();
+        var request = new BulkRetryRequest { WorkflowInstanceIds = workflowInstanceIds };
+        var alterationsApi = await BackendApiClientProvider.GetApiAsync<IAlterationsApi>();
+        await alterationsApi.BulkRetryAsync(request, CancellationToken.None);
+        _selectedRows.Clear();
         Reload();
     }
 
