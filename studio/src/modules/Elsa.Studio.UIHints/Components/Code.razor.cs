@@ -83,6 +83,7 @@ public partial class Code : IDisposable
     {
         _isInternalContentChange = true;
         var model = await _monacoEditor!.GetModel();
+        if (model == null) { _isInternalContentChange = false; return; }
         _lastMonacoEditorContent = InputValue;
         await model.SetValue(InputValue);
         _isInternalContentChange = false;
@@ -150,7 +151,7 @@ public partial class Code : IDisposable
             await EditorContext.UpdateExpressionAsync(expression);
 
             var model = await _monacoEditor!.GetModel();
-            await model.SetValue(newValue);
+            if (model != null) await model.SetValue(newValue);
         }
     }
 

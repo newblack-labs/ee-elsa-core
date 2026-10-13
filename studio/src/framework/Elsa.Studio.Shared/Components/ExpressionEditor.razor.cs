@@ -237,10 +237,17 @@ public partial class ExpressionEditor : IDisposable
             _selectedExpressionType = expression.Type;
 
         _lastMonacoEditorContent = expressionText;
-        await model.SetValue(expressionText);
-        _isInternalContentChange = false;
-        await Global.SetModelLanguage(JSRuntime, model, MonacoLanguage);
-        await RunMonacoHandlersAsync(_monacoEditor);
+        if (model != null)
+        {
+            await model.SetValue(expressionText);
+            _isInternalContentChange = false;
+            await Global.SetModelLanguage(JSRuntime, model, MonacoLanguage);
+            await RunMonacoHandlersAsync(_monacoEditor);
+        }
+        else
+        {
+            _isInternalContentChange = false;
+        }
     }
 
     private async Task RunMonacoHandlersAsync(StandaloneCodeEditor editor)

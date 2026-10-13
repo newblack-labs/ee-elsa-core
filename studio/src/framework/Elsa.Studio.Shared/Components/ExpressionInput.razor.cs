@@ -110,6 +110,10 @@ public partial class ExpressionInput : IDisposable
         try
         {
             var model = await editor.GetModel();
+
+            if (model == null)
+                return;
+
             await Global.SetModelLanguage(JSRuntime, model, monacoLanguage);
             await RunMonacoHandlersAsync(editor);
         }
@@ -171,6 +175,10 @@ public partial class ExpressionInput : IDisposable
         try
         {
             var model = await editor.GetModel();
+
+            if (model == null)
+                return;
+
             _lastMonacoEditorContent = InputValue;
             await model.SetValue(InputValue);
             await Global.SetModelLanguage(JSRuntime, model, MonacoLanguage);
@@ -317,6 +325,10 @@ public partial class ExpressionInput : IDisposable
             try
             {
                 var model = await editor.GetModel();
+
+                if (model == null)
+                    return;
+
                 await model.SetValue(InputValue);
             }
             catch (JSException exception) when (IsMissingMonacoEditorException(exception))
