@@ -20,20 +20,20 @@
     else
     {
         <MudGrid>
-            @foreach (var section in _sections)
+            @foreach (var entry in _sections)
             {
                 <MudItem xs="12" sm="6" md="4">
                     <MudCard Outlined="true" Style="height:100%">
                         <MudCardContent>
                             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                                <MudIcon Icon="@section.Icon" Color="Color.Primary" />
-                                <MudText Typo="Typo.h6">@section.DisplayName</MudText>
+                                <MudIcon Icon="@entry.Icon" Color="Color.Primary" />
+                                <MudText Typo="Typo.h6">@entry.DisplayName</MudText>
                             </MudStack>
-                            <MudText Typo="Typo.body2" Class="mt-3">@section.Description</MudText>
+                            <MudText Typo="Typo.body2" Class="mt-3">@entry.Description</MudText>
                         </MudCardContent>
                         <MudCardActions>
-                            <MudButton Href="@section.Href" Variant="Variant.Text" Color="Color.Primary">
-                                Open @section.DisplayName
+                            <MudButton Href="@entry.Href" Variant="Variant.Text" Color="Color.Primary">
+                                Open @entry.DisplayName
                             </MudButton>
                         </MudCardActions>
                     </MudCard>
