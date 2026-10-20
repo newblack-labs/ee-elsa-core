@@ -823,12 +823,12 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
     public async Task<long> CountAsync(Func<IQueryable<TEntity>, IQueryable<TEntity>> query, bool ignoreQueryFilters = false, CancellationToken cancellationToken = default)
     {
         await using var dbContext = await CreateDbContextAsync(cancellationToken);
-        var set = dbContext.Set<TEntity>().AsNoTracking();
-        var queryable = query(set.AsQueryable());
+        var queryable = dbContext.Set<TEntity>().AsNoTracking().AsQueryable();
 
         if (ignoreQueryFilters)
             queryable = queryable.IgnoreQueryFilters();
 
+        // Applied once: applying it twice, as before, was harmless for a filter but miscounted a query that pages.
         queryable = query(queryable);
         return await queryable.LongCountAsync(cancellationToken: cancellationToken);
     }
