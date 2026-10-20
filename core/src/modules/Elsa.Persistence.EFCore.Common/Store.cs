@@ -27,8 +27,14 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
     private static readonly TimeSpan WriteBaseDelay = TimeSpan.FromMilliseconds(50);
 
     // ReSharper disable once StaticMemberInGenericType
-    // Justification: This is a static member that is used to ensure that only one thread can access the database for TEntity at a time.
+    // Justification: SQLite allows one writer per database file and answers a concurrent write with "database is
+    // locked", so on SQLite the writes for TEntity take turns within the process. A server database (PostgreSQL,
+    // SQL Server, MySQL, Oracle) handles concurrent writers itself; there the lock only made every save of TEntity in
+    // the process wait for every other one, which capped a whole node at the rate one save could follow another.
     private static readonly SemaphoreSlim Semaphore = new(1, 1);
+
+    // Whether this store's provider is SQLite; read from the first context this instance creates.
+    private bool? _serializesWrites;
 
     /// <summary>
     /// Creates a new instance of the database context.
@@ -88,7 +94,7 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
         Func<TDbContext, TEntity, CancellationToken, ValueTask>? onSaving = null,
         CancellationToken cancellationToken = default)
     {
-        await Semaphore.WaitAsync(cancellationToken);
+        var serialized = await EnterWriteAsync(cancellationToken);
 
         try
         {
@@ -115,7 +121,8 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
         }
         finally
         {
-            Semaphore.Release();
+            if (serialized)
+                Semaphore.Release();
         }
     }
 
@@ -136,7 +143,7 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
     /// <param name="cancellationToken">The cancellation token.</param>
     public async Task SaveAsync(TEntity entity, Expression<Func<TEntity, string>> keySelector, Func<TDbContext, TEntity, CancellationToken, ValueTask>? onSaving, CancellationToken cancellationToken = default)
     {
-        await Semaphore.WaitAsync(cancellationToken); // Asynchronous wait
+        var serialized = await EnterWriteAsync(cancellationToken);
 
         try
         {
@@ -149,7 +156,21 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
             var lambda = keySelector.BuildEqualsExpression(entity);
             var exists = await set.AnyAsync(lambda, cancellationToken);
             set.Entry(entity).State = exists ? EntityState.Modified : EntityState.Added;
-            await dbContext.SaveChangesAsync(cancellationToken);
+
+            try
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException ex) when (!exists && DbExceptionClassifier.IsDuplicateKey(ex))
+            {
+                // Another writer inserted the same key between the check and this insert — which the lock above used to
+                // rule out within a process, and never could across processes. The row exists now, so this save updates it.
+                if (!await set.AnyAsync(lambda, cancellationToken))
+                    throw;
+
+                set.Entry(entity).State = EntityState.Modified;
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
         }
         catch (Exception ex)
         {
@@ -158,7 +179,8 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
         }
         finally
         {
-            Semaphore.Release();
+            if (serialized)
+                Semaphore.Release();
         }
     }
 
@@ -183,7 +205,7 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
         Func<TDbContext, TEntity, CancellationToken, ValueTask>? onSaving = null,
         CancellationToken cancellationToken = default)
     {
-        await Semaphore.WaitAsync(cancellationToken);
+        var serialized = await EnterWriteAsync(cancellationToken);
 
         try
         {
@@ -272,7 +294,8 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
         }
         finally
         {
-            Semaphore.Release();
+            if (serialized)
+                Semaphore.Release();
         }
     }
 
@@ -429,6 +452,28 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
             throw;
         }
     }
+
+    /// <summary>
+    /// Takes the per-entity write lock when the provider is SQLite, and returns whether it did; the caller releases it
+    /// only then. Other providers write concurrently.
+    /// </summary>
+    private async ValueTask<bool> EnterWriteAsync(CancellationToken cancellationToken)
+    {
+        if (_serializesWrites is null)
+        {
+            await using var dbContext = await CreateDbContextAsync(cancellationToken);
+            _serializesWrites = IsSqlite(dbContext.Database.ProviderName);
+        }
+
+        if (_serializesWrites != true)
+            return false;
+
+        await Semaphore.WaitAsync(cancellationToken);
+        return true;
+    }
+
+    private static bool IsSqlite(string? providerName) =>
+        providerName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true;
 
     /// <summary>
     /// Executes a whole database write operation with a fresh context after a provider
