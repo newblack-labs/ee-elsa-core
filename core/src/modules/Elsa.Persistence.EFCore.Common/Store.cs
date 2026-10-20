@@ -232,9 +232,13 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
                         entity.TenantId ??= tenantId;
                 }
 
+                // In key order, so two batches that overlap lock their rows in the same order: on a server database writers
+                // are not serialized in-process, and two upserts locking shared rows in opposite orders deadlock.
+                var inKeyOrder = entityList.OrderBy(keySelector.Compile(), StringComparer.Ordinal).ToList();
+
                 if (!tenancyEnabled || !ownedEntity)
                 {
-                    await dbContext.BulkUpsertAsync(entityList, keySelector, ct);
+                    await dbContext.BulkUpsertAsync(inKeyOrder, keySelector, ct);
                     return;
                 }
 
@@ -281,7 +285,7 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
                 }
                 else
                 {
-                    await dbContext.BulkUpsertAsync(entityList, keySelector, ct);
+                    await dbContext.BulkUpsertAsync(inKeyOrder, keySelector, ct);
                     if (transaction != null)
                         await transaction.CommitAsync(ct);
                 }
