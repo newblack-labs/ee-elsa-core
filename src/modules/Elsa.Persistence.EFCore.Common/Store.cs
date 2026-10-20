@@ -26,14 +26,12 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
     private static readonly TimeSpan WriteBaseDelay = TimeSpan.FromMilliseconds(50);
 
     // ReSharper disable once StaticMemberInGenericType
-    // Justification: SQLite allows one writer per database file and answers a concurrent write with "database is
-    // locked", so on SQLite the writes for TEntity take turns within the process. A server database (PostgreSQL,
-    // SQL Server, MySQL, Oracle) handles concurrent writers itself; there the lock only made every save of TEntity in
-    // the process wait for every other one, which capped a whole node at the rate one save could follow another.
+    // Justification: the writes for TEntity take turns within the process, except on PostgreSQL and MySQL. There the
+    // lock only made every save of TEntity in the process wait for every other one, which capped a whole node at the
+    // rate one save could follow another, and their upserts (ON CONFLICT / ON DUPLICATE KEY) settle two writers of the
+    // same new key in the database. SQLite allows one writer per database file, and the MERGE that SQL Server and
+    // Oracle upsert with lets two writers of the same new key both insert, so those keep taking turns.
     private static readonly SemaphoreSlim Semaphore = new(1, 1);
-
-    // Whether this store's provider is SQLite; read from the first context this instance creates.
-    private bool? _serializesWrites;
 
     /// <summary>
     /// Creates a new instance of the database context.
@@ -93,8 +91,6 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
         Func<TDbContext, TEntity, CancellationToken, ValueTask>? onSaving = null,
         CancellationToken cancellationToken = default)
     {
-        var serialized = await EnterWriteAsync(cancellationToken);
-
         try
         {
             var entityList = entities.ToList();
@@ -111,17 +107,12 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
                 }
 
                 await dbContext.BulkInsertAsync(entityList, ct);
-            }, cancellationToken);
+            }, WriteLock.ByProvider, cancellationToken);
         }
         catch (Exception ex)
         {
             await HandleDbExceptionAsync(ex, cancellationToken);
             throw;
-        }
-        finally
-        {
-            if (serialized)
-                Semaphore.Release();
         }
     }
 
@@ -142,44 +133,45 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
     /// <param name="cancellationToken">The cancellation token.</param>
     public async Task SaveAsync(TEntity entity, Expression<Func<TEntity, string>> keySelector, Func<TDbContext, TEntity, CancellationToken, ValueTask>? onSaving, CancellationToken cancellationToken = default)
     {
-        var serialized = await EnterWriteAsync(cancellationToken);
-
         try
         {
-            await using var dbContext = await CreateDbContextAsync(cancellationToken);
-
-            if (onSaving != null)
-                await onSaving(dbContext, entity, cancellationToken);
-
-            var set = dbContext.Set<TEntity>();
             var lambda = keySelector.BuildEqualsExpression(entity);
-            var exists = await set.AnyAsync(lambda, cancellationToken);
-            set.Entry(entity).State = exists ? EntityState.Modified : EntityState.Added;
 
-            try
+            // A second pass only when another writer inserted the same key between this save's check and its insert,
+            // which the lock rules out within a process but never could across processes. The pass starts over on a
+            // fresh context, so it finds the row and updates it, exactly as this save would have had it come second.
+            // A duplicate that is not that race (another unique index) fails the second pass the same way and throws.
+            for (var pass = 0;; pass++)
             {
-                await dbContext.SaveChangesAsync(cancellationToken);
-            }
-            catch (DbUpdateException ex) when (!exists && DbExceptionClassifier.IsDuplicateKey(ex))
-            {
-                // Another writer inserted the same key between the check and this insert — which the lock above used to
-                // rule out within a process, and never could across processes. The row exists now, so this save updates it.
-                if (!await set.AnyAsync(lambda, cancellationToken))
-                    throw;
+                var lostInsertRace = false;
 
-                set.Entry(entity).State = EntityState.Modified;
-                await dbContext.SaveChangesAsync(cancellationToken);
+                await ExecuteWriteWithRetryAsync(async (dbContext, ct) =>
+                {
+                    if (onSaving != null)
+                        await onSaving(dbContext, entity, ct);
+
+                    var set = dbContext.Set<TEntity>();
+                    var exists = await set.AnyAsync(lambda, ct);
+                    set.Entry(entity).State = exists ? EntityState.Modified : EntityState.Added;
+
+                    try
+                    {
+                        await dbContext.SaveChangesAsync(ct);
+                    }
+                    catch (DbUpdateException ex) when (!exists && pass == 0 && DbExceptionClassifier.IsDuplicateKey(ex))
+                    {
+                        lostInsertRace = true;
+                    }
+                }, WriteLock.ByProvider, cancellationToken);
+
+                if (!lostInsertRace)
+                    return;
             }
         }
         catch (Exception ex)
         {
             await HandleDbExceptionAsync(ex, cancellationToken);
             throw;
-        }
-        finally
-        {
-            if (serialized)
-                Semaphore.Release();
         }
     }
 
@@ -204,8 +196,6 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
         Func<TDbContext, TEntity, CancellationToken, ValueTask>? onSaving = null,
         CancellationToken cancellationToken = default)
     {
-        var serialized = await EnterWriteAsync(cancellationToken);
-
         try
         {
             var entityList = entities.ToList();
@@ -215,6 +205,10 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
 
             var tenantId = serviceProvider.GetRequiredService<ITenantAccessor>().TenantId;
             var tenancyEnabled = serviceProvider.GetService<IOptions<TenantsOptions>>()?.Value.IsEnabled == true;
+            var getKey = keySelector.Compile();
+
+            // With tenancy on, the ownership check and the upsert are two statements, so the saves keep taking turns on
+            // every provider: two tenants' batches of one key must not both pass the check within a process (#8490).
 
             await ExecuteWriteWithRetryAsync(async (dbContext, ct) =>
             {
@@ -240,23 +234,18 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
                 }
 
                 if (tenancyEnabled)
-                    await EnsureTenantOwnershipAsync(dbContext, entityList, keySelector, tenantId, ct);
+                    await EnsureTenantOwnershipAsync(dbContext, entityList, keySelector, getKey, tenantId, ct);
 
-                // In key order, so two batches that overlap lock their rows in the same order: on a server database writers
-                // are not serialized in-process, and two upserts locking shared rows in opposite orders deadlock.
-                var inKeyOrder = entityList.OrderBy(keySelector.Compile(), StringComparer.Ordinal).ToList();
+                // In key order, so two batches that overlap lock their rows in the same order: on PostgreSQL and MySQL
+                // writers are not serialized in-process, and two upserts locking shared rows in opposite orders deadlock.
+                var inKeyOrder = entityList.OrderBy(getKey, StringComparer.Ordinal).ToList();
                 await dbContext.BulkUpsertAsync(inKeyOrder, keySelector, ct);
-            }, cancellationToken);
+            }, tenancyEnabled ? WriteLock.Always : WriteLock.ByProvider, cancellationToken);
         }
         catch (Exception ex)
         {
             await HandleDbExceptionAsync(ex, cancellationToken);
             throw;
-        }
-        finally
-        {
-            if (serialized)
-                Semaphore.Release();
         }
     }
 
@@ -277,13 +266,13 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
         TDbContext dbContext,
         IList<TEntity> entities,
         Expression<Func<TEntity, string>> keySelector,
+        Func<TEntity, string> getKey,
         string writerTenantId,
         CancellationToken cancellationToken)
     {
         if (!typeof(Entity).IsAssignableFrom(typeof(TEntity)))
             return;
 
-        var getKey = keySelector.Compile();
         var keyName = keySelector.GetProperty()!.Name;
         var incomingByKey = entities.ToLookup(getKey, StringComparer.Ordinal);
         var existingRows = await FindExistingRowsAsync(dbContext, keyName, incomingByKey.Select(group => group.Key), cancellationToken);
@@ -324,7 +313,7 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
 
         // The batch is refused. Name only submitted keys: a stored key may be another tenant's spelling.
         // Ask the database which likely spellings reached a row; capped, since this only improves the
-        // message and runs while other saves of this entity type wait.
+        // message and, with tenancy on, runs while other saves of this entity type wait.
         var submittedVariants = new List<string>();
         var likelyVariants = keysWithoutOwnRow
             .Where(key => collidingRows.Any(row => LikelyCollationVariantComparer.Equals(key.TrimEnd(), row.Key.TrimEnd())))
@@ -431,59 +420,78 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
     }
 
     /// <summary>
-    /// Takes the per-entity write lock when the provider is SQLite, and returns whether it did; the caller releases it
-    /// only then. Other providers write concurrently.
-    /// </summary>
-    private async ValueTask<bool> EnterWriteAsync(CancellationToken cancellationToken)
-    {
-        if (_serializesWrites is null)
-        {
-            await using var dbContext = await CreateDbContextAsync(cancellationToken);
-            _serializesWrites = IsSqlite(dbContext.Database.ProviderName);
-        }
-
-        if (_serializesWrites != true)
-            return false;
-
-        await Semaphore.WaitAsync(cancellationToken);
-        return true;
-    }
-
-    private static bool IsSqlite(string? providerName) =>
-        providerName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true;
-
-    /// <summary>
     /// Executes a whole database write operation with a fresh context after a provider
     /// transient failure. The caller owns the transaction boundary so a retry never
     /// resumes a partially completed transaction.
     /// </summary>
-    internal async Task ExecuteWriteWithRetryAsync(
+    internal Task ExecuteWriteWithRetryAsync(
         Func<TDbContext, CancellationToken, Task> operation,
+        CancellationToken cancellationToken) =>
+        ExecuteWriteWithRetryAsync(operation, WriteLock.None, cancellationToken);
+
+    /// <summary>
+    /// As <see cref="ExecuteWriteWithRetryAsync(Func{TDbContext,CancellationToken,Task},CancellationToken)"/>, taking the
+    /// per-entity write lock as <paramref name="writeLock"/> says. The provider is read from the context the first attempt
+    /// writes with, and the lock is held across the retries, so no other write of TEntity runs in between.
+    /// </summary>
+    private async Task ExecuteWriteWithRetryAsync(
+        Func<TDbContext, CancellationToken, Task> operation,
+        WriteLock writeLock,
         CancellationToken cancellationToken)
     {
-        for (var attempt = 0;; attempt++)
+        var locked = false;
+
+        try
         {
-            var providerName = string.Empty;
+            for (var attempt = 0;; attempt++)
+            {
+                var providerName = string.Empty;
 
-            try
-            {
-                await using var dbContext = await CreateDbContextAsync(cancellationToken);
-                providerName = dbContext.Database.ProviderName ?? string.Empty;
-                await operation(dbContext, cancellationToken);
-                return;
-            }
-            catch (Exception ex)
-            {
-                if (ShouldRetryWrite(providerName, ex, attempt, cancellationToken))
+                try
                 {
-                    await Task.Delay(GetWriteRetryDelay(attempt), cancellationToken);
-                    continue;
-                }
+                    await using var dbContext = await CreateDbContextAsync(cancellationToken);
+                    providerName = dbContext.Database.ProviderName ?? string.Empty;
 
-                throw;
+                    if (!locked && (writeLock == WriteLock.Always || writeLock == WriteLock.ByProvider && SerializesWrites(providerName)))
+                    {
+                        // Only marked once taken: a cancelled wait never got the lock and must not release it.
+                        await Semaphore.WaitAsync(cancellationToken);
+                        locked = true;
+                    }
+
+                    await operation(dbContext, cancellationToken);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    if (ShouldRetryWrite(providerName, ex, attempt, cancellationToken))
+                    {
+                        await Task.Delay(GetWriteRetryDelay(attempt), cancellationToken);
+                        continue;
+                    }
+
+                    throw;
+                }
             }
         }
+        finally
+        {
+            if (locked)
+                Semaphore.Release();
+        }
     }
+
+    private enum WriteLock
+    {
+        None,
+        ByProvider,
+        Always,
+    }
+
+    private static bool SerializesWrites(string providerName) =>
+        !providerName.Contains("Npgsql", StringComparison.OrdinalIgnoreCase)
+        && !providerName.Contains("PostgreSql", StringComparison.OrdinalIgnoreCase)
+        && !providerName.Contains("MySql", StringComparison.OrdinalIgnoreCase);
 
     private static bool ShouldRetryWrite(string providerName, Exception exception, int attempt, CancellationToken cancellationToken)
     {
@@ -808,7 +816,6 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
         if (ignoreQueryFilters)
             queryable = queryable.IgnoreQueryFilters();
 
-        queryable = query(queryable);
         return await queryable.Select(selector).ToListAsync(cancellationToken);
     }
 
