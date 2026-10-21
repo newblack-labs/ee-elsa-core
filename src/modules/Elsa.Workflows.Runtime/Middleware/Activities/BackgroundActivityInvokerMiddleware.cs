@@ -169,7 +169,7 @@ public class BackgroundActivityInvokerMiddleware(
     {
         var activity = context.Activity;
         var bookmarksKey = GetBackgroundActivityBookmarksKey(activity.NodeId);
-        var bookmarks = context.WorkflowExecutionContext.GetProperty<ICollection<Bookmark>>(bookmarksKey);
+        var bookmarks = BackgroundActivityBookmarks.Read(context.WorkflowExecutionContext.Properties.GetValueOrDefault(bookmarksKey));
         if (bookmarks != null)
         {
             context.AddBookmarks(bookmarks);

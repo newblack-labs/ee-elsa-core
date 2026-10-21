@@ -73,7 +73,7 @@ public class BackgroundActivityInvoker(
             [scheduledActivitiesKey] = JsonSerializer.Serialize(scheduledActivities),
             [inputKey] = outputValues,
             [journalDataKey] = activityExecutionContext.JournalData,
-            [bookmarksKey] = activityExecutionContext.Bookmarks.ToList(),
+            [bookmarksKey] = BackgroundActivityBookmarks.Write(activityExecutionContext.Bookmarks), // A string, so the bookmark queue's serializer keeps it as it is.
             [propsKey] = activityExecutionContext.Properties.ToDictionary() // ChangeTrackingDictionary is not persistable, so we need to create a copy of the dictionary.
         };
 
