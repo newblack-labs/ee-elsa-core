@@ -1,4 +1,6 @@
 using System.Data.Common;
+using System.Transactions;
+using Elsa.Common.Entities;
 using Elsa.Common.Multitenancy;
 using Elsa.Persistence.EFCore;
 using Elsa.Tenants.Options;
@@ -26,84 +28,46 @@ public sealed class StoreWriteLockTests : IDisposable
 
     private readonly string _databaseFile = Path.Combine(Path.GetTempPath(), $"store-write-lock-{Guid.NewGuid():N}.db");
 
-    [Fact]
-    public async Task SaveAsync_OnSqlite_SavesOfTheSameEntityTypeTakeTurns()
+    public static TheoryData<FakeProvider, bool> Providers => new()
     {
-        var store = CreateStore<SqliteLockEntity>(FakeProvider.None);
+        { FakeProvider.None, true },
+        { FakeProvider.SqlServer, true },
+        { FakeProvider.Oracle, true },
+        { FakeProvider.PostgreSql, false },
+        { FakeProvider.MySql, false },
+    };
 
-        var maxInFlight = await MaxOverlapAsync<SqliteLockEntity>((i, hold) => store.SaveAsync(new() { Id = $"entity-{i}" }, x => x.Id, hold));
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task SaveAsync_TakesTurnsUnlessPostgreSqlOrMySql(FakeProvider provider, bool takesTurns)
+    {
+        var store = CreateStore<SaveLockEntity>(provider);
 
-        Assert.Equal(1, maxInFlight);
+        var maxInFlight = await MaxOverlapAsync<SaveLockEntity>((i, hold) => store.SaveAsync(new() { Id = $"entity-{i}" }, x => x.Id, hold));
+
+        AssertTurns(takesTurns, maxInFlight);
     }
 
-    [Fact]
-    public async Task SaveAsync_OnPostgreSql_SavesRunConcurrently()
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task AddManyAsync_TakesTurnsUnlessPostgreSqlOrMySql(FakeProvider provider, bool takesTurns)
     {
-        var store = CreateStore<ServerLockEntity>(FakeProvider.PostgreSql);
+        var store = CreateStore<AddManyLockEntity>(provider);
 
-        var maxInFlight = await MaxOverlapAsync<ServerLockEntity>((i, hold) => store.SaveAsync(new() { Id = $"entity-{i}" }, x => x.Id, hold));
+        var maxInFlight = await MaxOverlapAsync<AddManyLockEntity>((i, hold) => store.AddManyAsync([new() { Id = $"entity-{i}" }], hold));
 
-        Assert.True(maxInFlight > 1, $"saves ran one at a time (max {maxInFlight} in flight)");
+        AssertTurns(takesTurns, maxInFlight);
     }
 
-    [Fact]
-    public async Task SaveAsync_OnMySql_SavesRunConcurrently()
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task SaveManyAsync_TakesTurnsUnlessPostgreSqlOrMySql(FakeProvider provider, bool takesTurns)
     {
-        var store = CreateStore<MySqlLockEntity>(FakeProvider.MySql);
+        var store = CreateStore<SaveManyLockEntity>(provider, services: CreateServices(tenancyEnabled: false));
 
-        var maxInFlight = await MaxOverlapAsync<MySqlLockEntity>((i, hold) => store.SaveAsync(new() { Id = $"entity-{i}" }, x => x.Id, hold));
+        var maxInFlight = await MaxOverlapAsync<SaveManyLockEntity>((i, hold) => store.SaveManyAsync([new() { Id = $"entity-{i}" }], x => x.Id, hold));
 
-        Assert.True(maxInFlight > 1, $"saves ran one at a time (max {maxInFlight} in flight)");
-    }
-
-    [Fact]
-    public async Task SaveAsync_OnSqlServer_SavesOfTheSameEntityTypeTakeTurns()
-    {
-        var store = CreateStore<SqlServerLockEntity>(FakeProvider.SqlServer);
-
-        var maxInFlight = await MaxOverlapAsync<SqlServerLockEntity>((i, hold) => store.SaveAsync(new() { Id = $"entity-{i}" }, x => x.Id, hold));
-
-        Assert.Equal(1, maxInFlight);
-    }
-
-    [Fact]
-    public async Task SaveAsync_OnOracle_SavesOfTheSameEntityTypeTakeTurns()
-    {
-        var store = CreateStore<OracleLockEntity>(FakeProvider.Oracle);
-
-        var maxInFlight = await MaxOverlapAsync<OracleLockEntity>((i, hold) => store.SaveAsync(new() { Id = $"entity-{i}" }, x => x.Id, hold));
-
-        Assert.Equal(1, maxInFlight);
-    }
-
-    [Fact]
-    public async Task AddManyAsync_OnSqlite_WritesTakeTurns()
-    {
-        var store = CreateStore<SqliteAddLockEntity>(FakeProvider.None);
-
-        var maxInFlight = await MaxOverlapAsync<SqliteAddLockEntity>((i, hold) => store.AddManyAsync([new() { Id = $"entity-{i}" }], hold));
-
-        Assert.Equal(1, maxInFlight);
-    }
-
-    [Fact]
-    public async Task AddManyAsync_OnPostgreSql_WritesRunConcurrently()
-    {
-        var store = CreateStore<ServerAddLockEntity>(FakeProvider.PostgreSql);
-
-        var maxInFlight = await MaxOverlapAsync<ServerAddLockEntity>((i, hold) => store.AddManyAsync([new() { Id = $"entity-{i}" }], hold));
-
-        Assert.True(maxInFlight > 1, $"writes ran one at a time (max {maxInFlight} in flight)");
-    }
-
-    [Fact]
-    public async Task SaveManyAsync_OnPostgreSql_SavesRunConcurrently()
-    {
-        var store = CreateStore<ServerSaveManyLockEntity>(FakeProvider.PostgreSql, services: CreateServices(tenancyEnabled: false));
-
-        var maxInFlight = await MaxOverlapAsync<ServerSaveManyLockEntity>((i, hold) => store.SaveManyAsync([new() { Id = $"entity-{i}" }], x => x.Id, hold));
-
-        Assert.True(maxInFlight > 1, $"saves ran one at a time (max {maxInFlight} in flight)");
+        AssertTurns(takesTurns, maxInFlight);
     }
 
     [Fact]
@@ -112,7 +76,7 @@ public sealed class StoreWriteLockTests : IDisposable
         var store = CreateStore<TenancyLockEntity>(FakeProvider.PostgreSql, services: CreateServices(tenancyEnabled: true));
 
         // SaveManyAsync's ownership check and upsert are two statements: a SaveAsync or AddManyAsync of the same key by
-        // another tenant must not land between them (#8490).
+        // another tenant in this process must not land between them (#8490).
         var maxInFlight = await MaxOverlapAsync<TenancyLockEntity>((i, hold) => (i % 3) switch
         {
             0 => store.SaveManyAsync([new() { Id = "shared" }], x => x.Id, hold),
@@ -129,7 +93,7 @@ public sealed class StoreWriteLockTests : IDisposable
         var deadlock = new FailOnceInterceptor(() => new PostgresException("deadlock detected", "ERROR", "ERROR", "40P01"));
         var store = CreateStore<DeadlockEntity>(FakeProvider.PostgreSql, deadlock);
 
-        await store.SaveAsync(new DeadlockEntity { Id = "deadlocked", Value = "ours" }, x => x.Id);
+        await store.SaveAsync(new DeadlockEntity { Id = "deadlocked", Value = "ours" }, x => x.Id).WaitAsync(WriteTimeout);
 
         await using var check = CreateContext<DeadlockEntity>(FakeProvider.None);
         var saved = await check.Set<DeadlockEntity>().SingleAsync();
@@ -137,15 +101,18 @@ public sealed class StoreWriteLockTests : IDisposable
         Assert.Equal("ours", saved.Value);
     }
 
-    [Fact]
-    public async Task SaveManyAsync_WhenALaterChunkDeadlocks_TheRetryStartsFromNothingSaved()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SaveManyAsync_WhenALaterChunkDeadlocks_TheRetryStartsFromNothingSaved(bool tenancyEnabled)
     {
-        // 60 rows are two upsert statements of 50 and 10; the second one deadlocks once.
+        // 60 rows are two upsert statements of 50 and 10; the second one deadlocks once. With tenancy on, the ownership
+        // check runs in the same transaction first.
         var upserts = new UpsertCommandInterceptor(_databaseFile, failOnUpsert: 2);
-        var store = CreateStore<ChunkEntity>(FakeProvider.PostgreSql, upserts, CreateServices(tenancyEnabled: false));
+        var store = CreateStore<ChunkEntity>(FakeProvider.PostgreSql, upserts, CreateServices(tenancyEnabled));
         var entities = Enumerable.Range(0, 60).Select(i => new ChunkEntity { Id = $"k{i:D2}", Value = "ours" }).ToList();
 
-        await store.SaveManyAsync(entities, x => x.Id, CancellationToken.None);
+        await store.SaveManyAsync(entities, x => x.Id, CancellationToken.None).WaitAsync(WriteTimeout);
 
         // Upserts 1 and 2 were the failed attempt, 3 and 4 the retry. Before the retry's first chunk, the failed attempt's
         // first chunk is gone: had it stayed, the retry would write it a second time, over anything written in between.
@@ -161,9 +128,39 @@ public sealed class StoreWriteLockTests : IDisposable
         var upserts = new UpsertCommandInterceptor(_databaseFile);
         var store = CreateStore<KeyOrderEntity>(FakeProvider.PostgreSql, upserts, CreateServices(tenancyEnabled: false));
 
-        await store.SaveManyAsync(new[] { "c", "a", "b" }.Select(id => new KeyOrderEntity { Id = id, Value = "value" }), x => x.Id, CancellationToken.None);
+        await store.SaveManyAsync(new[] { "c", "a", "b" }.Select(id => new KeyOrderEntity { Id = id, Value = "value" }), x => x.Id, CancellationToken.None).WaitAsync(WriteTimeout);
 
         Assert.Equal(["a", "b", "c"], upserts.KeyParameters);
+    }
+
+    [Fact]
+    public async Task SaveManyAsync_InsideATransactionScope_JoinsItInsteadOfBeginningItsOwn()
+    {
+        // SQL Server wraps every workflow commit in a TransactionScope, and EF refuses to begin a transaction inside one.
+        var store = CreateStore<AmbientEntity>(FakeProvider.None, services: CreateServices(tenancyEnabled: false));
+
+        using (var scope = new TransactionScope(TransactionScopeOption.Required, TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await store.SaveManyAsync([new AmbientEntity { Id = "ambient", Value = "ours" }], x => x.Id, CancellationToken.None).WaitAsync(WriteTimeout);
+            scope.Complete();
+        }
+
+        await using var check = CreateContext<AmbientEntity>(FakeProvider.None);
+        Assert.Equal("ours", (await check.Set<AmbientEntity>().SingleAsync()).Value);
+    }
+
+    [Fact]
+    public async Task SaveManyAsync_InsideATransactionScope_DoesNotRetryADeadlock()
+    {
+        // A deadlock dooms the ambient transaction; only its owner can start over.
+        var upserts = new UpsertCommandInterceptor(_databaseFile, failOnUpsert: 1);
+        var store = CreateStore<AmbientDeadlockEntity>(FakeProvider.PostgreSql, upserts, CreateServices(tenancyEnabled: false));
+
+        using var scope = new TransactionScope(TransactionScopeOption.Required, TransactionScopeAsyncFlowOption.Enabled);
+        await Assert.ThrowsAsync<PostgresException>(() =>
+            store.SaveManyAsync([new AmbientDeadlockEntity { Id = "ambient", Value = "ours" }], x => x.Id, CancellationToken.None).WaitAsync(WriteTimeout));
+
+        Assert.Single(upserts.RowsBeforeUpsert);
     }
 
     [Fact]
@@ -181,7 +178,7 @@ public sealed class StoreWriteLockTests : IDisposable
     {
         var store = CreateStore<PagingEntity>(FakeProvider.None);
         foreach (var i in Enumerable.Range(0, 5))
-            await store.SaveAsync(new PagingEntity { Id = $"entity-{i}", Value = "value" }, x => x.Id);
+            await store.SaveAsync(new PagingEntity { Id = $"entity-{i}", Value = "value" }, x => x.Id).WaitAsync(WriteTimeout);
 
         var ids = await store.QueryAsync(q => q.OrderBy(x => x.Id).Skip(2).Take(2), x => x.Id, CancellationToken.None);
 
@@ -194,7 +191,7 @@ public sealed class StoreWriteLockTests : IDisposable
         var racer = new RacingInsertInterceptor("racing", "theirs");
         var store = CreateStore<RaceEntity>(FakeProvider.None, racer);
 
-        await store.SaveAsync(new RaceEntity { Id = "racing", Value = "ours" }, x => x.Id);
+        await store.SaveAsync(new RaceEntity { Id = "racing", Value = "ours" }, x => x.Id).WaitAsync(WriteTimeout);
 
         await using var check = CreateContext<RaceEntity>(FakeProvider.None);
         var saved = await check.Set<RaceEntity>().SingleAsync();
@@ -226,6 +223,14 @@ public sealed class StoreWriteLockTests : IDisposable
             await Assert.ThrowsAsync<StopWriteException>(() => running.WaitAsync(WriteTimeout));
 
         return maxInFlight;
+    }
+
+    private static void AssertTurns(bool takesTurns, int maxInFlight)
+    {
+        if (takesTurns)
+            Assert.Equal(1, maxInFlight);
+        else
+            Assert.True(maxInFlight > 1, $"writes ran one at a time (max {maxInFlight} in flight)");
     }
 
     private static void InterlockedMax(ref int target, int value)
@@ -261,8 +266,11 @@ public sealed class StoreWriteLockTests : IDisposable
     private LockDbContext<TEntity> CreateContext<TEntity>(FakeProvider provider, IInterceptor? interceptor = null)
         where TEntity : class, ILockEntity, new()
     {
+        // SQLite cannot enlist in an ambient transaction, and EF reports that as an error by default; its statements then
+        // run outside it, which the TransactionScope tests accept, since they check what the store itself does there.
         var builder = new DbContextOptionsBuilder<LockDbContext<TEntity>>()
-            .UseSqlite(ConnectionString(_databaseFile));
+            .UseSqlite(ConnectionString(_databaseFile))
+            .ConfigureWarnings(warnings => warnings.Ignore(RelationalEventId.AmbientTransactionWarning));
         switch (provider)
         {
             case FakeProvider.PostgreSql:
@@ -300,49 +308,37 @@ public sealed class StoreWriteLockTests : IDisposable
         string Value { get; set; }
     }
 
-    public sealed class SqliteLockEntity : ILockEntity
+    public sealed class SaveLockEntity : ILockEntity
     {
         public string Id { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;
     }
 
-    public sealed class ServerLockEntity : ILockEntity
+    public sealed class AddManyLockEntity : ILockEntity
     {
         public string Id { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;
     }
 
-    public sealed class MySqlLockEntity : ILockEntity
+    public sealed class SaveManyLockEntity : ILockEntity
     {
         public string Id { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;
     }
 
-    public sealed class SqlServerLockEntity : ILockEntity
+    /// <summary>An <see cref="Entity"/>, so that with tenancy on SaveManyAsync checks its ownership.</summary>
+    public sealed class ChunkEntity : Entity, ILockEntity
+    {
+        public string Value { get; set; } = string.Empty;
+    }
+
+    public sealed class AmbientEntity : ILockEntity
     {
         public string Id { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;
     }
 
-    public sealed class OracleLockEntity : ILockEntity
-    {
-        public string Id { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
-    }
-
-    public sealed class SqliteAddLockEntity : ILockEntity
-    {
-        public string Id { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
-    }
-
-    public sealed class ServerAddLockEntity : ILockEntity
-    {
-        public string Id { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
-    }
-
-    public sealed class ServerSaveManyLockEntity : ILockEntity
+    public sealed class AmbientDeadlockEntity : ILockEntity
     {
         public string Id { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;
@@ -355,12 +351,6 @@ public sealed class StoreWriteLockTests : IDisposable
     }
 
     public sealed class DeadlockEntity : ILockEntity
-    {
-        public string Id { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
-    }
-
-    public sealed class ChunkEntity : ILockEntity
     {
         public string Id { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;

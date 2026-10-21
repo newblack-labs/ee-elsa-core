@@ -31,7 +31,8 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
     // TakesWriteLock), so that:
     // - on SQLite, which allows one writer per database file, two writes do not meet as "database is locked";
     // - on SQL Server and Oracle, whose upsert is a MERGE, two upserts of the same new key do not both insert;
-    // - with tenancy on, two tenants' writes of one key do not both pass SaveManyAsync's ownership check (#8490).
+    // - with tenancy on, two tenants' writes of one key in this process do not both pass SaveManyAsync's ownership check
+    //   (#8490); a writer in another process still can, between the check and the upsert.
     // PostgreSQL and MySQL without tenancy skip it: their upserts (ON CONFLICT / ON DUPLICATE KEY) settle two writers of
     // one key in the database, a duplicate in AddManyAsync's plain insert fails with or without the lock, and SaveAsync
     // handles losing an insert race itself.
@@ -195,6 +196,11 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
     /// <param name="keySelector">The key selector to get the primary key property.</param>
     /// <param name="onSaving">The callback to invoke before saving the entity.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
+    /// <remarks>
+    /// Outside an ambient transaction, each attempt runs in a transaction of its own, which EF Core refuses under a
+    /// retrying execution strategy (<c>EnableRetryOnFailure</c>); this store retries transient failures itself, and such
+    /// a strategy is not supported.
+    /// </remarks>
     public async Task SaveManyAsync(
         IEnumerable<TEntity> entities,
         Expression<Func<TEntity, string>> keySelector,
@@ -236,10 +242,13 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
                 if (!tenancyEnabled || !ownedEntity)
                 {
                     // The upsert is one statement per chunk of rows. In one transaction, an attempt that fails on a later
-                    // chunk takes its earlier chunks back, so a retry does not write them again over a newer write.
-                    await using var upsertTransaction = await dbContext.Database.BeginTransactionAsync(ct);
+                    // chunk takes its earlier chunks back, so a retry does not write them again over a newer write. Inside
+                    // a transaction that is already in effect (the workflow commit's TransactionScope on SQL Server), the
+                    // statements join it, and its owner makes them all or nothing; EF refuses to begin one inside it.
+                    await using var upsertTransaction = HasTransaction(dbContext) ? null : await dbContext.Database.BeginTransactionAsync(ct);
                     await dbContext.BulkUpsertAsync(inKeyOrder, keySelector, ct);
-                    await upsertTransaction.CommitAsync(ct);
+                    if (upsertTransaction != null)
+                        await upsertTransaction.CommitAsync(ct);
                     return;
                 }
 
@@ -456,7 +465,8 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
     /// <summary>
     /// Executes a whole database write operation with a fresh context after a provider
     /// transient failure. The caller owns the transaction boundary so a retry never
-    /// resumes a partially completed transaction.
+    /// resumes a partially completed transaction. Inside an ambient transaction nothing is
+    /// retried: the failure has already doomed it, and only its owner can start over.
     /// </summary>
     internal Task ExecuteWriteWithRetryAsync(
         Func<TDbContext, CancellationToken, Task> operation,
@@ -465,9 +475,9 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
 
     /// <summary>
     /// As <see cref="ExecuteWriteWithRetryAsync(Func{TDbContext,CancellationToken,Task},CancellationToken)"/>, taking the
-    /// per-entity write lock as <paramref name="writeLock"/> says. The provider is read from the context the first attempt
-    /// writes with. When the lock is taken, it is held across the retries, so no other locked write of TEntity in this
-    /// process runs between two attempts.
+    /// per-entity write lock as <paramref name="writeLock"/> says, by the provider of each attempt's context until the lock
+    /// is taken. Once taken, it is held across the retries, so no other locked write of TEntity in this process runs
+    /// between two attempts.
     /// </summary>
     private async Task ExecuteWriteWithRetryAsync(
         Func<TDbContext, CancellationToken, Task> operation,
@@ -544,8 +554,15 @@ public class Store<TDbContext, TEntity>(IDbContextFactory<TDbContext> dbContextF
         return attempt < WriteMaxRetryCount
                && !cancellationToken.IsCancellationRequested
                && exception is not OperationCanceledException
+               && System.Transactions.Transaction.Current is null
                && DbExceptionClassifier.IsTransient(providerName, exception);
     }
+
+    /// <summary>
+    /// Whether the context's statements already run in a transaction: one begun on it, or an ambient one.
+    /// </summary>
+    private static bool HasTransaction(TDbContext dbContext) =>
+        dbContext.Database.CurrentTransaction != null || System.Transactions.Transaction.Current != null;
 
     private static TimeSpan GetWriteRetryDelay(int attempt) => TimeSpan.FromMilliseconds(WriteBaseDelay.TotalMilliseconds * (attempt + 1));
 
