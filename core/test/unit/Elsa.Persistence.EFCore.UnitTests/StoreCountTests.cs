@@ -55,9 +55,9 @@ public sealed class StoreCountTests : IAsyncDisposable
         Assert.Equal([0L, 1L], page.Items.Select(x => x.Sequence));
         Assert.Contains(_commands.Commands, sql => sql.Contains("COUNT(", StringComparison.OrdinalIgnoreCase));
         // Every query that reads the records' activity state also limits how many it reads.
-        Assert.All(
-            _commands.Commands.Where(sql => sql.Contains("SerializedActivityState", StringComparison.Ordinal)),
-            sql => Assert.Contains("LIMIT", sql, StringComparison.OrdinalIgnoreCase));
+        var stateQueries = _commands.Commands.Where(sql => sql.Contains("SerializedActivityState", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(stateQueries);
+        Assert.All(stateQueries, sql => Assert.Contains("LIMIT", sql, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -66,8 +66,7 @@ public sealed class StoreCountTests : IAsyncDisposable
         await SeedAsync("instance", 5);
         var store = _services.GetRequiredService<EntityStore<RuntimeElsaDbContext, WorkflowExecutionLogRecord>>();
 
-        // Applied twice, the old way, this counted the first two of the first two: still 2. Skipping one shows it: once
-        // is 4, twice was 3.
+        // Of five records, skipping one leaves 4 when the query is applied once, and 3 when it is applied twice.
         var count = await store.CountAsync(query => query.OrderBy(x => x.Sequence).Skip(1), CancellationToken.None);
 
         Assert.Equal(4, count);
