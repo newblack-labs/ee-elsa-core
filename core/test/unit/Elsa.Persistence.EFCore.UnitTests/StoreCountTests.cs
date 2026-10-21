@@ -15,9 +15,8 @@ using NSubstitute;
 namespace Elsa.Persistence.EFCore.UnitTests;
 
 /// <summary>
-/// A page's total is counted in the database. The stores used to load every matching row — for the execution log, every
-/// record of an instance with its activity state and payload — only to count them in memory, so each page of a long
-/// workflow's journal read its whole history.
+/// A page's total is counted in the database, with a <c>COUNT</c>, rather than by loading the matching rows: for the
+/// execution log those are every record of an instance with its activity state and payload, for every page of its journal.
 /// </summary>
 public sealed class StoreCountTests : IAsyncDisposable
 {

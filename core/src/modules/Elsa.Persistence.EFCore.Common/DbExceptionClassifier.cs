@@ -39,8 +39,8 @@ internal static class DbExceptionClassifier
         if (providerName.Contains("MySql", StringComparison.OrdinalIgnoreCase))
             return EnumerateExceptions(exception).Any(IsMySqlTransientException);
 
-        // Writers are no longer serialized in-process on PostgreSQL, so two bulk upserts touching the same rows can
-        // deadlock; the database aborts one of them, which is safe to run again.
+        // Where the writes of an entity type do not take turns in-process (no tenancy), two bulk upserts touching the same
+        // rows can deadlock; the database aborts one of them, which is safe to run again.
         if (providerName.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) || providerName.Contains("PostgreSql", StringComparison.OrdinalIgnoreCase))
             return EnumerateExceptions(exception).Any(IsPostgreSqlTransientException);
 
