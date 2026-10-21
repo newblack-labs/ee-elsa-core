@@ -53,6 +53,18 @@ public sealed class DbExceptionClassifierTests
         Assert.True(DbExceptionClassifier.IsTransient("Pomelo.EntityFrameworkCore.MySql", exception));
     }
 
+    [Theory]
+    [InlineData("40P01", true)]  // deadlock_detected
+    [InlineData("40001", true)]  // serialization_failure
+    [InlineData("23505", false)] // unique_violation
+    [InlineData("57014", false)] // query_canceled
+    public void IsTransient_WhenPostgreSqlAbortsAWriteForADeadlockOrSerializationFailure(string sqlState, bool expected)
+    {
+        var exception = new DbUpdateException("Write failed", new Npgsql.PostgresException("failed", "ERROR", "ERROR", sqlState));
+
+        Assert.Equal(expected, DbExceptionClassifier.IsTransient("Npgsql.EntityFrameworkCore.PostgreSQL", exception));
+    }
+
     private sealed class SqliteExceptionWithExtendedCode(int sqliteErrorCode, int sqliteExtendedErrorCode) : Exception
     {
         public int SqliteErrorCode { get; } = sqliteErrorCode;

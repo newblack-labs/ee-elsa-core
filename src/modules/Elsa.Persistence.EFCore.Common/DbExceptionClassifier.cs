@@ -25,6 +25,12 @@ internal static class DbExceptionClassifier
         1213, // ER_LOCK_DEADLOCK
     ];
 
+    private static readonly HashSet<string> PostgreSqlTransientSqlStates =
+    [
+        "40P01", // deadlock_detected
+        "40001", // serialization_failure
+    ];
+
     public static bool IsTransient(string providerName, Exception exception)
     {
         if (providerName.Contains("SqlServer", StringComparison.OrdinalIgnoreCase))
@@ -32,6 +38,11 @@ internal static class DbExceptionClassifier
 
         if (providerName.Contains("MySql", StringComparison.OrdinalIgnoreCase))
             return EnumerateExceptions(exception).Any(IsMySqlTransientException);
+
+        // Where the writes of an entity type do not take turns in-process (no tenancy), two bulk upserts touching the same
+        // rows can deadlock; the database aborts one of them, which is safe to run again.
+        if (providerName.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) || providerName.Contains("PostgreSql", StringComparison.OrdinalIgnoreCase))
+            return EnumerateExceptions(exception).Any(IsPostgreSqlTransientException);
 
         return false;
     }
@@ -59,6 +70,15 @@ internal static class DbExceptionClassifier
                                    || typeNamespace.Equals("MySql.Data.MySqlClient", StringComparison.OrdinalIgnoreCase));
 
         return isMySqlException && GetErrorNumbers(exception).Any(MySqlTransientErrorNumbers.Contains);
+    }
+
+    private static bool IsPostgreSqlTransientException(Exception exception)
+    {
+        var type = exception.GetType();
+        return type.Name.Equals("PostgresException", StringComparison.Ordinal)
+               && type.Namespace == "Npgsql"
+               && GetStringProperty(exception, "SqlState") is { } sqlState
+               && PostgreSqlTransientSqlStates.Contains(sqlState);
     }
 
     private static bool IsDuplicateKeyException(Exception exception)
