@@ -28,6 +28,11 @@ public class DefaultCommitStateHandler(
 
     public async Task CommitAsync(WorkflowExecutionContext workflowExecutionContext, WorkflowState workflowState, CancellationToken cancellationToken = default)
     {
+        // A new instance whose lock was deferred becomes reachable with its first bookmark, so take the lock before that
+        // bookmark is written. No-op for a run that holds its lock already or has none.
+        if (workflowExecutionContext.Bookmarks.Count > 0)
+            await DeferredWorkflowInstanceLock.EnsureAcquiredAsync(workflowExecutionContext.Id, cancellationToken);
+
         WorkflowInstance? workflowInstance = null;
         using var notificationScope = workflowCommitNotificationBuffer.Begin();
         await workflowCommitTransaction.ExecuteAsync(async ct =>

@@ -107,8 +107,20 @@ public class DistributedLockResilienceTests(App app) : AppComponentTest(app)
         mockProvider.Reset();
         mockProvider.FailReleaseOnce();
 
+        // A run that never waits takes no lock when it is deferred, so there would be nothing to release.
+        var previousDeferNewInstanceLock = LockOptions.DeferNewInstanceLock;
+        LockOptions.DeferNewInstanceLock = false;
+
         // Act - Release failure should be caught and logged, not thrown
-        var response = await workflowClient.CreateAndRunInstanceAsync(request);
+        RunWorkflowInstanceResponse response;
+        try
+        {
+            response = await workflowClient.CreateAndRunInstanceAsync(request);
+        }
+        finally
+        {
+            LockOptions.DeferNewInstanceLock = previousDeferNewInstanceLock;
+        }
 
         // Assert
         Assert.NotNull(response);

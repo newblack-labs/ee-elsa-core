@@ -38,7 +38,13 @@ public class DistributedWorkflowClient(
     {
         // We need to lock newly created workflow instances too, because it might dispatch child workflows that attempt to resume the parent workflow.
         // For example, when using a DispatchWorkflow activity configured to wait for the dispatched workflow to complete.
-        return await WithLockAsync(async () => await _localWorkflowClient.CreateAndRunInstanceAsync(request, cancellationToken), cancellationToken);
+        if (!distributedLockingOptions.Value.DeferNewInstanceLock)
+            return await WithLockAsync(async () => await _localWorkflowClient.CreateAndRunInstanceAsync(request, cancellationToken), cancellationToken);
+
+        // Such a resume needs the bookmark the parent persists, so the lock can wait for that: the commit handler takes it
+        // before the first bookmark is written. A run that never waits never locks.
+        await using var instanceLock = DeferredWorkflowInstanceLock.Begin(WorkflowInstanceId, ct => AcquireLockWithRetryAsync(LockKey, ct), ReleaseLockAsync);
+        return await _localWorkflowClient.CreateAndRunInstanceAsync(request, cancellationToken);
     }
 
     public async Task CancelAsync(CancellationToken cancellationToken = default)
@@ -67,10 +73,11 @@ public class DistributedWorkflowClient(
         return await WithLockAsync(async () => await _localWorkflowClient.DeleteAsync(cancellationToken), cancellationToken);
     }
 
+    private string LockKey => $"workflow-instance:{WorkflowInstanceId}";
+
     private async Task<TReturn> WithLockAsync<TReturn>(Func<Task<TReturn>> func, CancellationToken cancellationToken = default)
     {
-        var lockKey = $"workflow-instance:{WorkflowInstanceId}";
-        var lockHandle = await AcquireLockWithRetryAsync(lockKey, cancellationToken);
+        var lockHandle = await AcquireLockWithRetryAsync(LockKey, cancellationToken);
 
         try
         {
