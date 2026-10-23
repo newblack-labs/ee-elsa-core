@@ -20,11 +20,18 @@ public class DistributedLockingOptions
     public bool AllowLocalLockProviderInDistributedRuntime { get; set; }
 
     /// <summary>
-    /// Takes the lock of a newly created workflow instance only once the instance persists its first bookmark, instead of
-    /// for its whole first run. Until then nothing else can reach the instance: resuming it needs a bookmark, so there is
-    /// nothing to exclude, and a run that completes without ever waiting never holds the lock (or, with a database lock
-    /// provider, the connection it keeps open). From that first bookmark on, the lock is held until the run ends, exactly
-    /// as before, so a child workflow or timer that resumes the instance still waits for it. Off by default.
+    /// Takes the lock of a newly created workflow instance at the run's first commit instead of before the run starts. Until
+    /// that commit the instance is not stored, so nothing else can reach it. From the first commit on the lock is held until
+    /// the run ends, exactly as before. The gain is for runs that commit only at their end (no commit strategy that commits
+    /// mid-run): they hold the lock — and, with a database lock provider, the connection it keeps open — only for that last
+    /// commit instead of for the whole run, including its waits on other systems. A run that commits after every activity
+    /// takes the lock at its first commit, so it gains little. Off by default.
     /// </summary>
+    /// <remarks>
+    /// Taking the lock now happens inside the run: the commit that takes it waits up to <see cref="LockAcquisitionTimeout"/>
+    /// per attempt, retried on transient errors. If it cannot be taken the run fails with a <c>DeferredInstanceLockException</c>
+    /// and nothing of it is stored; the activities that ran before that commit are not undone, and a retry runs them again.
+    /// With the eager lock the run would not have started.
+    /// </remarks>
     public bool DeferNewInstanceLock { get; set; }
 }

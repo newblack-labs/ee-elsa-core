@@ -41,9 +41,9 @@ public class DistributedWorkflowClient(
         if (!distributedLockingOptions.Value.DeferNewInstanceLock)
             return await WithLockAsync(async () => await _localWorkflowClient.CreateAndRunInstanceAsync(request, cancellationToken), cancellationToken);
 
-        // Such a resume needs the bookmark the parent persists, so the lock can wait for that: the commit handler takes it
-        // before the first bookmark is written. A run that never waits never locks.
-        await using var instanceLock = DeferredWorkflowInstanceLock.Begin(WorkflowInstanceId, ct => AcquireLockWithRetryAsync(LockKey, ct), ReleaseLockAsync);
+        // Nothing can reach the instance before its first commit stores it, so the commit handler takes the lock there. A run
+        // that commits only at its end holds it only for that commit.
+        await using var instanceLock = DeferredWorkflowInstanceLock.Begin(WorkflowInstanceId, AcquireDeferredLockAsync, ReleaseLockAsync);
         return await _localWorkflowClient.CreateAndRunInstanceAsync(request, cancellationToken);
     }
 
@@ -86,6 +86,20 @@ public class DistributedWorkflowClient(
         finally
         {
             await ReleaseLockAsync(lockHandle);
+        }
+    }
+
+    /// <summary>Takes a new instance's deferred lock at its first commit; a failure there fails the run, said once, with its id.</summary>
+    private async Task<IDistributedSynchronizationHandle?> AcquireDeferredLockAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await AcquireLockWithRetryAsync(LockKey, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex, "Could not take the lock of new workflow instance {WorkflowInstanceId} before its first commit; the run fails and nothing of it is stored. The activities that already ran are not undone.", WorkflowInstanceId);
+            throw new DeferredInstanceLockException(WorkflowInstanceId, ex);
         }
     }
 

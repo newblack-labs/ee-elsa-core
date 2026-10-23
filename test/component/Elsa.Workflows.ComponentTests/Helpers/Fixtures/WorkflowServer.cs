@@ -113,8 +113,8 @@ public class WorkflowServer(Infrastructure infrastructure, string url) : WebAppl
                     runtime.DistributedLockingOptions = options =>
                     {
                         options.AllowLocalLockProviderInDistributedRuntime = true;
-                        // Every scenario runs with the deferred lock; DeferredInstanceLockTests compares it with the eager one.
-                        options.DeferNewInstanceLock = true;
+                        // The default (eager) lock; DeferredInstanceLockTests turns the deferred one on and compares the two.
+                        options.DeferNewInstanceLock = false;
                     };
                     // Use test-specific bookmark queue worker without throttling to prevent timeouts
                     runtime.BookmarkQueueWorker = sp => sp.GetRequiredService<TestBookmarkQueueWorker>();
