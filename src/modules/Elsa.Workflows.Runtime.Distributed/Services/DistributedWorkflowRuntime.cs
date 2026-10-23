@@ -29,8 +29,10 @@ public partial class DistributedWorkflowRuntime : IWorkflowRuntime
     /// <inheritdoc />
     public ValueTask<IWorkflowClient> CreateClientAsync(string? workflowInstanceId, CancellationToken cancellationToken = default)
     {
+        // Only an id generated here is known not to be stored already, which is what lets a new instance's lock be deferred.
+        var generated = workflowInstanceId == null;
         workflowInstanceId ??= _identityGenerator.GenerateId();
-        var client = (IWorkflowClient)ActivatorUtilities.CreateInstance(_serviceProvider, typeof(DistributedWorkflowClient), workflowInstanceId);
+        var client = (IWorkflowClient)ActivatorUtilities.CreateInstance(_serviceProvider, typeof(DistributedWorkflowClient), workflowInstanceId, generated);
         return new(client);
     }
 }
