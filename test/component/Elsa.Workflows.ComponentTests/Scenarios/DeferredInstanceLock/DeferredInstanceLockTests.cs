@@ -36,6 +36,8 @@ public class DeferredInstanceLockTests(App app) : AppComponentTest(app)
         var client = await WorkflowRuntime.CreateClientAsync();
         var instanceId = client.WorkflowInstanceId;
         var probe = RunProbe.For(instanceId);
+        var counter = SelectiveMockProvider.MockLock(LockName(instanceId));
+        counter.Reset();
 
         try
         {
@@ -48,15 +50,20 @@ public class DeferredInstanceLockTests(App app) : AppComponentTest(app)
             // Waiting on another system: the deferred run holds no lock (and no connection for it), the eager one does.
             await using (var probeHandle = await SelectiveMockProvider.RealProvider.TryAcquireLockAsync(LockName(instanceId)))
                 Assert.Equal(deferred, probeHandle != null);
+            Assert.Equal(deferred ? 0 : 1, counter.AcquisitionAttemptCount);
 
             probe.Release.SetResult();
             var response = await run.WaitAsync(TimeSpan.FromSeconds(30));
             Assert.Equal(WorkflowStatus.Finished, response.Status);
+
+            // Both took it once: the deferred run at its only commit, at the end.
+            Assert.Equal(1, counter.AcquisitionAttemptCount);
         }
         finally
         {
             probe.Release.TrySetResult();
             RunProbe.Remove(instanceId);
+            SelectiveMockProvider.Unmock(LockName(instanceId));
         }
     }
 
@@ -101,7 +108,68 @@ public class DeferredInstanceLockTests(App app) : AppComponentTest(app)
     }
 
     [Fact]
-    public async Task LockThatCannotBeTaken_FailsTheRunAndStoresNothing()
+    public async Task CallerSuppliedIdOfAStoredInstance_IsLockedAtOnce()
+    {
+        // A dispatch may name its instance; if that instance is stored, other runs can reach it before any commit of this one.
+        await using var _ = UseDeferredLock(true);
+        var first = await WorkflowRuntime.CreateClientAsync();
+        await first.CreateAndRunInstanceAsync(new()
+        {
+            WorkflowDefinitionHandle = WorkflowDefinitionHandle.ByDefinitionId(RunsStraightThroughWorkflow.DefinitionId, VersionOptions.Latest)
+        });
+        var instanceId = first.WorkflowInstanceId;
+        Assert.NotNull(await InstanceStore.FindAsync(new WorkflowInstanceFilter { Id = instanceId }));
+        var probe = RunProbe.For(instanceId);
+
+        try
+        {
+            var supplied = await WorkflowRuntime.CreateClientAsync(instanceId);
+            var run = supplied.CreateAndRunInstanceAsync(new()
+            {
+                WorkflowDefinitionHandle = WorkflowDefinitionHandle.ByDefinitionId(BlockWithoutCommitWorkflow.DefinitionId, VersionOptions.Latest)
+            });
+            await probe.Waiting.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            await using (var probeHandle = await SelectiveMockProvider.RealProvider.TryAcquireLockAsync(LockName(instanceId)))
+                Assert.Null(probeHandle);
+
+            probe.Release.SetResult();
+            await run.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            RunProbe.Remove(instanceId);
+        }
+    }
+
+    [Fact]
+    public async Task InstanceStoredUnderTheGeneratedIdBeforeTheFirstCommit_FailsTheRun()
+    {
+        // The backstop: whatever stored a row under this id ran unlocked against it, so the first commit must not overwrite it.
+        await using var _ = UseDeferredLock(true);
+        var other = await WorkflowRuntime.CreateClientAsync();
+        await other.CreateAndRunInstanceAsync(new()
+        {
+            WorkflowDefinitionHandle = WorkflowDefinitionHandle.ByDefinitionId(RunsStraightThroughWorkflow.DefinitionId, VersionOptions.Latest)
+        });
+        var stored = (await InstanceStore.FindAsync(new WorkflowInstanceFilter { Id = other.WorkflowInstanceId }))!;
+        var client = await WorkflowRuntime.CreateClientAsync();
+        stored.Id = client.WorkflowInstanceId;
+        stored.WorkflowState.Id = client.WorkflowInstanceId;
+        await InstanceStore.SaveAsync(stored);
+
+        var failure = await Assert.ThrowsAnyAsync<Exception>(() => client.CreateAndRunInstanceAsync(new()
+        {
+            WorkflowDefinitionHandle = WorkflowDefinitionHandle.ByDefinitionId(RunsStraightThroughWorkflow.DefinitionId, VersionOptions.Latest)
+        }).WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Contains(Chain(failure), e => e is DeferredInstanceLockException locked && locked.WorkflowInstanceId == client.WorkflowInstanceId);
+        Assert.Equal(stored.DefinitionId, (await InstanceStore.FindAsync(new WorkflowInstanceFilter { Id = client.WorkflowInstanceId }))!.DefinitionId);
+    }
+
+    [Fact]
+    public async Task LockThatCannotBeTaken_FailsTheRunWithoutStoringItsState()
     {
         await using var _ = UseDeferredLock(true);
         var client = await WorkflowRuntime.CreateClientAsync();
@@ -118,12 +186,21 @@ public class DeferredInstanceLockTests(App app) : AppComponentTest(app)
             }));
 
             Assert.Contains(Chain(failure), e => e is DeferredInstanceLockException locked && locked.WorkflowInstanceId == instanceId);
+            Assert.Equal(4, mock.AcquisitionAttemptCount); // The first attempt and three retries, at the run's only commit.
             Assert.Null(await InstanceStore.FindAsync(new WorkflowInstanceFilter { Id = instanceId }));
         }
         finally
         {
             SelectiveMockProvider.Unmock(lockName);
         }
+
+        // The same query finds a run whose lock could be taken.
+        var control = await WorkflowRuntime.CreateClientAsync();
+        await control.CreateAndRunInstanceAsync(new()
+        {
+            WorkflowDefinitionHandle = WorkflowDefinitionHandle.ByDefinitionId(RunsStraightThroughWorkflow.DefinitionId, VersionOptions.Latest)
+        });
+        Assert.NotNull(await InstanceStore.FindAsync(new WorkflowInstanceFilter { Id = control.WorkflowInstanceId }));
     }
 
     private static IEnumerable<Exception> Chain(Exception? exception)

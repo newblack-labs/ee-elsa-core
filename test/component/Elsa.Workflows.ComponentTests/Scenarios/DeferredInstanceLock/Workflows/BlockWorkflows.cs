@@ -14,7 +14,8 @@ public class BlockWithoutCommitWorkflow : WorkflowBase
     }
 }
 
-/// <summary>Commits without a bookmark, then waits: what a commit-after-every-activity strategy does before a slow activity.</summary>
+/// <summary>Commits without a bookmark, then waits: an instance stored and executing before a slow step, as a commit strategy
+/// that commits around activities leaves it.</summary>
 public class CommitThenBlockWorkflow : WorkflowBase
 {
     public static readonly string DefinitionId = Guid.NewGuid().ToString();

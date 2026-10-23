@@ -8,22 +8,24 @@ namespace Elsa.Workflows.Runtime;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The distributed workflow client locks an instance so that no two runs of it overlap. Before a new instance's first commit
-/// there is no stored instance, so nothing can reach it: not a resume (which needs a stored bookmark), not the restart of
-/// interrupted workflows, a delete or the dispatch outbox (which all need the stored row). <see cref="DefaultCommitStateHandler"/>
-/// calls <see cref="EnsureAcquiredAsync"/> before every commit, so the lock is taken before the first one writes anything,
-/// and from then on it is held until the scope is disposed at the end of the run, as an eager lock would have been. A run
-/// that commits only at its end (no commit strategy committing mid-run) holds the lock only for that last commit, not while
-/// it runs.
+/// The distributed workflow client locks an instance so that no two runs of it overlap. It defers the lock only for an id the
+/// runtime generated, which no stored instance has: before such an instance's first commit there is no stored bookmark to
+/// resume and no row for the restart of interrupted workflows, a delete or the dispatch outbox to reach.
+/// <see cref="DefaultCommitStateHandler"/> calls <see cref="EnsureAcquiredAsync"/> before every commit, so the lock is taken
+/// before the first one writes anything, and is held from then until the scope is disposed at the end of the run — the rest
+/// of the run, the commit's own handlers and deferred tasks included. A run that commits only at its end takes it there. A
+/// custom <see cref="ICommitStateHandler"/> must call <see cref="EnsureAcquiredAsync"/> itself, or the instance runs unlocked.
 /// </para>
 /// <para>
-/// If the lock cannot be taken, the acquisition fails for good: every later commit of the run fails the same way, so the run
-/// fails rather than storing anything unlocked. The activities it has run by then are not undone.
+/// If the lock cannot be taken, the acquisition fails for good: every later commit of the run fails the same way while the
+/// scope lasts, so the run fails rather than storing its state unlocked. What it started by then is not undone (see
+/// <see cref="DeferredInstanceLockException"/>).
 /// </para>
 /// <para>
 /// The scope travels with the run's async flow, and so into any task started during the run; acquiring is done once, by
-/// whichever caller comes first. It only answers for its own instance, so a child workflow run in-process on the same flow,
-/// which has an id of its own, is not mistaken for it.
+/// whichever caller comes first. A task that outlives the run and commits after the scope was disposed is not locked by it.
+/// The scope only answers for its own instance, so a child workflow run in-process on the same flow, which has an id of its
+/// own, is not mistaken for it.
 /// </para>
 /// </remarks>
 internal sealed class DeferredWorkflowInstanceLock : IAsyncDisposable
@@ -54,7 +56,7 @@ internal sealed class DeferredWorkflowInstanceLock : IAsyncDisposable
 
     /// <summary>
     /// Opens a scope for the instance about to run on the current async flow. Nothing is locked yet. The scope is visible to
-    /// the flow it was begun on and the flows it starts, and no longer once that method returns.
+    /// the async method that called this and the flows that method starts, and no longer once that method returns.
     /// </summary>
     /// <param name="workflowInstanceId">The instance.</param>
     /// <param name="acquire">Takes the instance's lock; called once, by the first commit.</param>
@@ -72,8 +74,11 @@ internal sealed class DeferredWorkflowInstanceLock : IAsyncDisposable
     /// <summary>
     /// Takes the lock of <paramref name="workflowInstanceId"/> if a deferred scope on the current flow owns that instance;
     /// otherwise does nothing (an eagerly locked run, or no distributed runtime at all). Once taken, or once taking it has
-    /// failed, every call answers with that outcome without trying again.
+    /// failed, later calls answer with that outcome without trying again, until the scope is disposed; after that they do
+    /// nothing.
     /// </summary>
+    /// <param name="workflowInstanceId">The instance about to be committed.</param>
+    /// <param name="cancellationToken">Cancels the acquisition; a cancelled one stays cancelled for the rest of the scope.</param>
     public static Task EnsureAcquiredAsync(string workflowInstanceId, CancellationToken cancellationToken = default)
     {
         var scope = CurrentScope.Value;
@@ -122,15 +127,4 @@ internal sealed class DeferredWorkflowInstanceLock : IAsyncDisposable
 
         await _release(handle);
     }
-}
-
-/// <summary>
-/// A new workflow instance's lock could not be taken before its first commit, so the run fails without storing anything.
-/// The activities that ran before that commit are not undone; a retry runs them again.
-/// </summary>
-public sealed class DeferredInstanceLockException(string workflowInstanceId, Exception innerException)
-    : Exception($"Could not take the lock of new workflow instance '{workflowInstanceId}' before its first commit; the run fails and nothing of it is stored.", innerException)
-{
-    /// <summary>The instance whose lock could not be taken.</summary>
-    public string WorkflowInstanceId { get; } = workflowInstanceId;
 }

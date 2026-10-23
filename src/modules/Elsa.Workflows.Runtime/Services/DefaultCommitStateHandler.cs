@@ -30,8 +30,8 @@ public class DefaultCommitStateHandler(
     {
         // A new instance whose lock was deferred becomes reachable with its first commit — a resume needs a stored bookmark,
         // and the restart of interrupted workflows, a delete or the dispatch outbox need the stored row — so take the lock
-        // before any commit writes. No-op for a run that holds its lock already or has none; throws, every time, once taking
-        // it has failed, so nothing of the run is stored unlocked.
+        // before any commit writes. No-op for a run that holds its lock already or has none; while the run's scope lasts it
+        // throws again once taking the lock has failed, so the run's state is not stored unlocked.
         await DeferredWorkflowInstanceLock.EnsureAcquiredAsync(workflowExecutionContext.Id, cancellationToken);
 
         WorkflowInstance? workflowInstance = null;
